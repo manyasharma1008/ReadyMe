@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+python-multipart
+opencv-python
+mediapipe
+numpy
+python-dotenv
+pydantic
+pillow
