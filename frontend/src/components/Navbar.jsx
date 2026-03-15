@@ -1,70 +1,54 @@
-import { useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useLocation } from "react-router-dom"
+import { useState } from "react"
 
 export default function Navbar() {
+  const location = useLocation()
+  const isPreview = location.pathname === "/preview"
   const [menuOpen, setMenuOpen] = useState(false)
 
+  const linkColor = isPreview ? "text-white" : "text-[#2C2B28]"
+
   return (
-    <header className="fixed top-0 left-0 right-0 z-[1000] bg-cream-100/95 backdrop-blur border-b border-charcoal-700/10">
-      <div className="max-w-screen-xl mx-auto px-6 md:px-10 h-14 flex items-center justify-between">
+    <nav className="absolute top-0 w-full z-50 backdrop-blur-md px-6 md:px-10 lg:px-14 py-6 flex items-center justify-between">
 
-        {/* Logo */}
-        <Link
-          to="/"
-          className="font-display text-2xl font-light tracking-widest text-charcoal-800 select-none"
-        >
-          ReadyMe
-        </Link>
-
-        {/* Desktop nav */}
-        <nav className="hidden md:flex items-center gap-10">
-          <Link to="/" className="nav-link">Home</Link>
-          <Link to="/contact" className="nav-link">Contact</Link>
-          <Link to="/help" className="nav-link">Help</Link>
-        </nav>
-
-        {/* Mobile hamburger */}
-        <button
-          className="md:hidden flex flex-col gap-1.5 p-1"
-          onClick={() => setMenuOpen(!menuOpen)}
-          aria-label="Toggle menu"
-        >
-          <span className={`block w-5 h-px bg-charcoal-800 transition-all duration-300 ${menuOpen ? 'rotate-45 translate-y-2' : ''}`} />
-          <span className={`block w-5 h-px bg-charcoal-800 transition-all duration-300 ${menuOpen ? 'opacity-0' : ''}`} />
-          <span className={`block w-5 h-px bg-charcoal-800 transition-all duration-300 ${menuOpen ? '-rotate-45 -translate-y-2' : ''}`} />
-        </button>
+      {/* Logo */}
+      <div className={`text-2xl font-medium ${linkColor}`}>
+        ReadyMe
       </div>
 
-      {/* Mobile dropdown */}
+      {/* Desktop / Tablet Menu */}
+      <div className="hidden md:flex items-center gap-8 lg:gap-12">
+        <Link to="/" className={`nav-link ${linkColor}`}>HOME</Link>
+        <Link to="/contact" className={`nav-link ${linkColor}`}>CONTACT</Link>
+        <Link to="/help" className={`nav-link ${linkColor}`}>HELP</Link>
+      </div>
+
+      {/* Mobile Hamburger */}
+      <button
+        className={`md:hidden flex flex-col gap-[5px] ${linkColor}`}
+        onClick={() => setMenuOpen(!menuOpen)}
+      >
+        <span className="w-6 h-[2px] bg-current"></span>
+        <span className="w-6 h-[2px] bg-current"></span>
+        <span className="w-6 h-[2px] bg-current"></span>
+      </button>
+
       {menuOpen && (
-        <div className="md:hidden bg-cream-100 border-t border-charcoal-700/10 px-6 py-4 flex flex-col gap-4">
+  <div className="mobile-menu absolute top-full left-0 w-full bg-[#F5F1EB] shadow-md md:hidden flex flex-col items-center py-6 gap-6">
+    <Link to="/" className="nav-link" onClick={() => setMenuOpen(false)}>
+      HOME
+    </Link>
 
-          <Link
-            to="/"
-            className="nav-link py-1"
-            onClick={() => setMenuOpen(false)}
-          >
-            Home
-          </Link>
+    <Link to="/contact" className="nav-link" onClick={() => setMenuOpen(false)}>
+      CONTACT
+    </Link>
 
-          <Link
-            to="/contact"
-            className="nav-link py-1"
-            onClick={() => setMenuOpen(false)}
-          >
-            Contact
-          </Link>
+    <Link to="/help" className="nav-link" onClick={() => setMenuOpen(false)}>
+      HELP
+    </Link>
+  </div>
+)}
 
-          <Link
-            to="/help"
-            className="nav-link py-1"
-            onClick={() => setMenuOpen(false)}
-          >
-            Help
-          </Link>
-
-        </div>
-      )}
-    </header>
+    </nav>
   )
 }
