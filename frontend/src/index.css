@@ -132,3 +132,7 @@
     border-radius: 2px;
   }
 }
+body, html, #root {
+  margin: 0;
+  height: 100%;
+}

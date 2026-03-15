@@ -1,27 +1,21 @@
 import { BrowserRouter as Router, Routes, Route } from "react-router-dom"
-import Navbar from "./components/Navbar"
 import Home from "./pages/Home"
-import Contact from "./pages/Contact"
 import PreviewRoom from "./components/PreviewRoom"
+import Contact from "./pages/Contact"
 import Help from "./pages/Help"
+import Navbar from "./components/Navbar"
 
 function App() {
   return (
     <Router>
-
-      {/* Navbar always visible */}
       <Navbar />
 
-      {/* Push content below fixed navbar */}
-      <div className="pt-14">
-        <Routes>
-          <Route path="/" element={<Home />} />
-          <Route path="/contact" element={<Contact />} />
-          <Route path="/preview" element={<PreviewRoom />} />
-          <Route path="/help" element={<Help />} />
-        </Routes>
-      </div>
-
+      <Routes>
+        <Route path="/" element={<Home />} />
+        <Route path="/preview" element={<PreviewRoom />} />
+        <Route path="/contact" element={<Contact />} />
+        <Route path="/help" element={<Help />} />
+      </Routes>
     </Router>
   )
 }

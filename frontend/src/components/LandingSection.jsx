@@ -1,5 +1,5 @@
-import { useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useRef, useState } from "react"
+import { useNavigate } from "react-router-dom"
 
 export default function LandingSection({ image }) {
   const cardRef = useRef(null)
@@ -32,15 +32,14 @@ export default function LandingSection({ image }) {
     setTilt({ x: 0, y: 0 })
   }
 
-
   return (
     <div className="relative flex flex-col items-center justify-center h-full animate-fade-up stagger-2">
 
-      {/* IMAGE CARD (NO CLICK NAVIGATION) */}
+      {/* IMAGE CARD */}
       <div
         ref={cardRef}
         className="relative w-full cursor-crosshair"
-        style={{ perspective: '1200px' }}
+        style={{ perspective: "1200px" }}
         onMouseMove={handleMouseMove}
         onMouseEnter={handleMouseEnter}
         onMouseLeave={handleMouseLeave}
@@ -49,14 +48,19 @@ export default function LandingSection({ image }) {
           className="tilt-card relative overflow-hidden rounded-md shadow-[0_20px_60px_rgba(44,43,40,0.12)]"
           style={{
             transform: `rotateX(${tilt.x}deg) rotateY(${tilt.y}deg) scale(${isHovering ? 1.02 : 1})`,
-            transition: isHovering ? 'transform 0.1s ease-out' : 'transform 0.5s ease-out',
+            transition: isHovering
+              ? "transform 0.1s ease-out"
+              : "transform 0.5s ease-out",
           }}
         >
           <img
-            src={image?.src || 'https://images.unsplash.com/photo-1515886657613-9f3515b0c78f?w=800&q=90'}
-            alt={image?.alt || 'Featured fashion look'}
+            src={
+              image?.src ||
+              "https://images.unsplash.com/photo-1515886657613-9f3515b0c78f?w=800&q=90"
+            }
+            alt={image?.alt || "Featured fashion look"}
             className="w-full object-cover object-top"
-            style={{ height: 'clamp(420px, 70vh, 680px)' }}
+            style={{ height: "clamp(420px, 70vh, 680px)" }}
           />
 
           <div
@@ -66,14 +70,20 @@ export default function LandingSection({ image }) {
 
           <div className="absolute bottom-4 left-4 flex items-center gap-2">
             <span className="font-mono text-[9px] tracking-widest text-cream-100/70 uppercase">
-              Look {image?.id ? String(image.id).padStart(2, '0') : '01'}
+              Look {image?.id ? String(image.id).padStart(2, "0") : "01"}
             </span>
             <div className="w-8 h-px bg-cream-100" />
           </div>
         </div>
       </div>
 
-     
+      {/* MAIN CTA BUTTON */}
+      <button
+        onClick={() => navigate("/preview")}
+        className="cta-btn mt-10 border border-charcoal-700 px-10 py-3 font-mono text-xs tracking-[0.25em] uppercase text-charcoal-700"
+      >
+        <span>EXPLORE VIRTUAL TRY-ON</span>
+      </button>
 
       {/* Decorative label */}
       <div className="mt-6 text-center select-none">
