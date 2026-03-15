@@ -1,1 +1,134 @@
 @import "tailwindcss";
+
+@layer base {
+  * {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+  }
+
+  html {
+    scroll-behavior: smooth;
+  }
+
+  body {
+  background-color: #F5F1EB;   /* cream-100 */
+  color: #2B2B2B;              /* charcoal-700 */
+  font-family: 'DM Sans', sans-serif;
+  font-weight: 300;
+  -webkit-font-smoothing: antialiased;
+}
+}
+
+@layer components {
+  .tilt-card {
+    transform-style: preserve-3d;
+    transition: transform 0.3s ease;
+    will-change: transform;
+  }
+
+  .thumbnail-img {
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    filter: grayscale(30%);
+  }
+
+  .thumbnail-img:hover,
+  .thumbnail-img.active {
+    filter: grayscale(0%);
+    transform: scale(1.03);
+  }
+
+  .feature-tag {
+    transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  .feature-tag:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 8px 24px rgba(44, 43, 40, 0.12);
+  }
+
+  .nav-link {
+    position: relative;
+    font-size: 0.7rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: #2C2B28;
+    font-weight: 400;
+  }
+
+  .nav-link::after {
+    content: '';
+    position: absolute;
+    bottom: -2px;
+    left: 0;
+    width: 0;
+    height: 1px;
+    background-color: #B65C3A;   /* rust accent */
+    transition: width 0.3s ease;
+  }
+
+  .nav-link:hover::after {
+    width: 100%;
+  }
+
+  .cta-btn {
+    position: relative;
+    overflow: hidden;
+    transition: color 0.3s ease;
+  }
+
+  .cta-btn::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background-color: #2C2B28;
+    transform: translateX(-101%);
+    transition: transform 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  .cta-btn:hover::before {
+    transform: translateX(0);
+  }
+
+  .cta-btn:hover {
+    color: #F9F6EE;
+  }
+
+  .cta-btn span {
+    position: relative;
+    z-index: 1;
+  }
+
+  .stagger-1 { animation-delay: 0.1s; }
+  .stagger-2 { animation-delay: 0.2s; }
+  .stagger-3 { animation-delay: 0.3s; }
+  .stagger-4 { animation-delay: 0.4s; }
+  .stagger-5 { animation-delay: 0.5s; }
+
+  .animate-fade-up {
+    opacity: 0;
+    animation: fadeUp 0.8s ease forwards;
+  }
+
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(20px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  @keyframes fadeIn {
+    from { opacity: 0; }
+    to   { opacity: 1; }
+  }
+
+  .thumb-scroll::-webkit-scrollbar {
+    width: 0px;
+    height: 2px;
+  }
+  .thumb-scroll::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .thumb-scroll::-webkit-scrollbar-thumb {
+    background: #C4A484;   /* clay accent */
+    border-radius: 2px;
+  }
+}
