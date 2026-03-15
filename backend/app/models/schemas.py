@@ -39,3 +39,94 @@ class ProfileResponse(BaseModel):
     name: Optional[str]
     created_at: str
     updated_at: str
+
+
+# Size Chart Schemas
+
+class SizeChartEntry(BaseModel):
+    """Single size row with measurement thresholds."""
+    size: str = Field(..., description="Size identifier (e.g., S, M, L, 32, 34)")
+    height_min: Optional[float] = Field(None, description="Minimum height in cm")
+    height_max: Optional[float] = Field(None, description="Maximum height in cm")
+    chest_min: Optional[float] = Field(None, description="Minimum chest circumference in cm")
+    chest_max: Optional[float] = Field(None, description="Maximum chest circumference in cm")
+    waist_min: Optional[float] = Field(None, description="Minimum waist circumference in cm")
+    waist_max: Optional[float] = Field(None, description="Maximum waist circumference in cm")
+    hips_min: Optional[float] = Field(None, description="Minimum hips circumference in cm")
+    hips_max: Optional[float] = Field(None, description="Maximum hips circumference in cm")
+    shoulder_min: Optional[float] = Field(None, description="Minimum shoulder width in cm")
+    shoulder_max: Optional[float] = Field(None, description="Maximum shoulder width in cm")
+
+
+class SizeChart(BaseModel):
+    """Complete size chart for a brand/category."""
+    brand: str = Field(..., description="Brand name")
+    category: str = Field(..., description="Garment category (shirts, pants, dresses, etc.)")
+    sizes: list[SizeChartEntry] = Field(..., description="List of size entries")
+    gender: Optional[str] = Field(None, description="Gender target (men, women, unisex)")
+
+
+class SizePredictionRequest(BaseModel):
+    """Request for size prediction."""
+    measurements: BodyMeasurements = Field(..., description="Body measurements")
+    size_chart: Optional[SizeChart] = Field(None, description="Brand-specific size chart")
+    use_standard_chart: bool = Field(True, description="Use standard size chart if no brand chart provided")
+
+
+class SizeRecommendation(BaseModel):
+    """Individual size recommendation."""
+    size: str = Field(..., description="Recommended size")
+    confidence: float = Field(..., description="Confidence score 0-100")
+    fit_type: str = Field(..., description="Fit type: tight, perfect, loose, between_sizes")
+    explanation: str = Field(..., description="Human-readable explanation")
+    alternative_size: Optional[str] = Field(None, description="Alternative size recommendation")
+
+
+class SizePredictionResponse(BaseModel):
+    """Response for size prediction."""
+    success: bool = Field(..., description="Whether prediction was successful")
+    recommendations: list[SizeRecommendation] = Field(..., description="List of recommendations")
+    measurements_used: list[str] = Field(..., description="List of measurements used for matching")
+    warnings: Optional[list[str]] = Field(None, description="Warnings about incomplete data")
+
+
+class SizeValidationRequest(BaseModel):
+    """Request for validating user size against body measurements."""
+    measurements: BodyMeasurements = Field(..., description="Body measurements")
+    current_size: str = Field(..., description="User's current size")
+    size_chart: SizeChart = Field(..., description="Size chart to validate against")
+
+
+class SizeValidationResponse(BaseModel):
+    """Response for size validation."""
+    success: bool
+    is_match: bool = Field(..., description="Whether current size matches body measurements")
+    recommended_size: Optional[str] = Field(None, description="Correct size recommendation")
+    fit_score: float = Field(..., description="Fit score 0-100")
+    explanation: str
+
+
+# Product Size Chart Extraction Schemas
+
+class ProductExtractRequest(BaseModel):
+    """Request for extracting size chart from product URL."""
+    url: str = Field(..., description="Product page URL (Amazon, Myntra, Flipkart)")
+    category: Optional[str] = Field(None, description="Expected garment category")
+
+
+class ProductInfo(BaseModel):
+    """Product information extracted from page."""
+    name: str = Field(..., description="Product name")
+    brand: Optional[str] = Field(None, description="Brand name")
+    category: str = Field(..., description="Garment category")
+    gender: Optional[str] = Field(None, description="Target gender")
+    url: str = Field(..., description="Original product URL")
+
+
+class ProductExtractResponse(BaseModel):
+    """Response for product size chart extraction."""
+    success: bool = Field(..., description="Whether extraction was successful")
+    product: Optional[ProductInfo] = Field(None, description="Product information")
+    size_chart: Optional[SizeChart] = Field(None, description="Extracted size chart")
+    message: Optional[str] = Field(None, description="Status message")
+    warnings: Optional[list[str]] = Field(None, description="Extraction warnings")
