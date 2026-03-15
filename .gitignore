@@ -3,3 +3,5 @@ __pycache__/
 .claude/
 models/weights/
 .env
+backend/app/models/weights/
+*.keras
