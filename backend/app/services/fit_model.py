@@ -1,31 +1,45 @@
 """
 Fit Model - TensorFlow/Keras Model for Learning from User Fit Feedback
 
-This module provides a neural network model that learns from user fit feedback
-to improve size recommendations over time.
+TensorFlow is optional. If it is not installed, the API will still run
+but ML-based predictions will return default values.
 """
 
 import os
 import json
 import numpy as np
-from typing import Optional
+from typing import Optional, TYPE_CHECKING, Any
 from datetime import datetime
 
-# TensorFlow imports - with graceful fallback
+# -----------------------------
+# TensorFlow imports (optional)
+# -----------------------------
 try:
     import tensorflow as tf
     from tensorflow import keras
-    from keras import layers, models
+    from tensorflow.keras import layers, models
     TENSORFLOW_AVAILABLE = True
-except ImportError:
-    TENSORFLOW_AVAILABLE = False
+except Exception:
     tf = None
     keras = None
     layers = None
     models = None
+    TENSORFLOW_AVAILABLE = False
 
 
+# -----------------------------
+# Type handling (safe for runtime)
+# -----------------------------
+if TYPE_CHECKING:
+    from tensorflow.keras import Model
+    FitModel = Model
+else:
+    FitModel = Any 
+
+
+# -----------------------------
 # Model configuration
+# -----------------------------
 MODEL_DIR = os.path.join(os.path.dirname(__file__), "..", "models", "weights")
 MODEL_PATH = os.path.join(MODEL_DIR, "fit_model.keras")
 TRAINING_DATA_PATH = os.path.join(MODEL_DIR, "training_data.json")
@@ -78,7 +92,7 @@ def normalize_measurements(measurements: dict) -> np.ndarray:
     return np.array(normalized)
 
 
-def create_fit_model() -> Optional[keras.Model]:
+def create_fit_model() -> Optional[FitModel]:
     """
     Create a neural network model for fit prediction.
     Input: 5 body measurements + 1 category encoding
@@ -106,8 +120,7 @@ def create_fit_model() -> Optional[keras.Model]:
 
     return model
 
-
-def load_model() -> Optional[keras.Model]:
+def load_model() -> Optional[FitModel]:
     """Load the trained model from disk."""
     if not TENSORFLOW_AVAILABLE:
         return None
@@ -124,7 +137,7 @@ def load_model() -> Optional[keras.Model]:
     return create_fit_model()
 
 
-def save_model(model: keras.Model) -> bool:
+def save_model(model: FitModel) -> bool:
     """Save the trained model to disk."""
     if not TENSORFLOW_AVAILABLE:
         return False
