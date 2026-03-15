@@ -13,7 +13,7 @@ const THUMBS = [
   },
   {
     id: 3,
-    src: "https://st.depositphotos.com/2097531/2144/i/450/depositphotos_21440313-stock-photo-attractive-man-dressed-casual-wearing.jpg",
+    src: "https://www.apetogentleman.com/wp-content/uploads/2018/06/male-models-noah.jpg",
     alt: "Look 03",
   },
   {
