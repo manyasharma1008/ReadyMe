@@ -68,7 +68,7 @@ export default function LandingSection({ image }) {
             <span className="font-mono text-[9px] tracking-widest text-cream-100/70 uppercase">
               Look {image?.id ? String(image.id).padStart(2, '0') : '01'}
             </span>
-            <div className="w-8 h-px bg-cream-100/40" />
+            <div className="w-8 h-px bg-cream-100" />
           </div>
         </div>
       </div>

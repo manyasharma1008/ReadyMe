@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { Link } from 'react-router-dom'
 
 export default function Navbar() {
   const [menuOpen, setMenuOpen] = useState(false)
@@ -8,16 +9,18 @@ export default function Navbar() {
       <div className="max-w-screen-xl mx-auto px-6 md:px-10 h-14 flex items-center justify-between">
 
         {/* Logo */}
-        <a href="/" className="font-display text-2xl font-light tracking-widest text-charcoal-800 select-none">
+        <Link
+          to="/"
+          className="font-display text-2xl font-light tracking-widest text-charcoal-800 select-none"
+        >
           ReadyMe
-        </a>
+        </Link>
 
         {/* Desktop nav */}
         <nav className="hidden md:flex items-center gap-10">
-          <a href="#" className="nav-link">Home</a>
-          <a href="#features" className="nav-link">Features</a>
-          <a href="#contact" className="nav-link">Contact</a>
-          <a href="#help" className="nav-link">Help</a>
+          <Link to="/" className="nav-link">Home</Link>
+          <Link to="/contact" className="nav-link">Contact</Link>
+          <Link to="/help" className="nav-link">Help</Link>
         </nav>
 
         {/* Mobile hamburger */}
@@ -35,16 +38,31 @@ export default function Navbar() {
       {/* Mobile dropdown */}
       {menuOpen && (
         <div className="md:hidden bg-cream-100 border-t border-charcoal-700/10 px-6 py-4 flex flex-col gap-4">
-          {['Home', 'Features', 'Contact', 'Help'].map(item => (
-            <a
-              key={item}
-              href={item === 'Home' ? '#' : `#${item.toLowerCase()}`}
-              className="nav-link py-1"
-              onClick={() => setMenuOpen(false)}
-            >
-              {item}
-            </a>
-          ))}
+
+          <Link
+            to="/"
+            className="nav-link py-1"
+            onClick={() => setMenuOpen(false)}
+          >
+            Home
+          </Link>
+
+          <Link
+            to="/contact"
+            className="nav-link py-1"
+            onClick={() => setMenuOpen(false)}
+          >
+            Contact
+          </Link>
+
+          <Link
+            to="/help"
+            className="nav-link py-1"
+            onClick={() => setMenuOpen(false)}
+          >
+            Help
+          </Link>
+
         </div>
       )}
     </header>

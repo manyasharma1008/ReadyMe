@@ -8,7 +8,7 @@ export default function Home() {
   const [activeThumb, setActiveThumb] = useState(THUMBS[0])
 
   return (
-    <div className="min-h-screen bg-cream-50">
+    <div className="min-h-screen bg-cream-100">
       <Navbar />
 
       {/* Main 3-column grid */}
