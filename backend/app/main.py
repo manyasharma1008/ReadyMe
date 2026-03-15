@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.routers import scan
+from app.routers import scan, size, product
 
 app = FastAPI(
     title="ReadyMe Body Measurement API",
@@ -19,6 +19,8 @@ app.add_middleware(
 
 # Include routers
 app.include_router(scan.router, prefix="/scan", tags=["scan"])
+app.include_router(size.router, prefix="/size", tags=["size"])
+app.include_router(product.router, prefix="/product", tags=["product"])
 
 @app.get("/")
 async def root():
