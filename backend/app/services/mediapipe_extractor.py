@@ -1,3 +1,4 @@
+import cv2
 import mediapipe as mp
 import numpy as np
 
@@ -111,11 +112,5 @@ def extract_body_landmarks(image: np.ndarray):
     Returns:
         Landmark data if body detected, None otherwise
     """
-    import cv2
-
     extractor = get_extractor()
     return extractor.extract_landmarks(image)
-
-
-# Import cv2 for color conversion
-import cv2
