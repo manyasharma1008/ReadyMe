@@ -44,38 +44,23 @@ export default function Home() {
 
           {/* Thumbnails — horizontal scroll on mobile */}
           <div className="flex gap-3 overflow-x-auto thumb-scroll pb-2">
-            {/* We re-render thumbnails horizontally */}
-            {/* Inline since mobile needs horizontal layout */}
-            {[...Array(5)].map((_, i) => {
-              const thumb = {
-                id: i + 1,
-                src: [
-                  'https://images.unsplash.com/photo-1515886657613-9f3515b0c78f?w=200&q=80',
-                  'https://images.unsplash.com/photo-1529139574466-a303027c1d8b?w=200&q=80',
-                  'https://images.unsplash.com/photo-1539109136881-3be0616acf4b?w=200&q=80',
-                  'https://images.unsplash.com/photo-1496747611176-843222e1e57c?w=200&q=80',
-                  'https://images.unsplash.com/photo-1469334031218-e382a71b716b?w=200&q=80',
-                ][i],
-                alt: `Look 0${i + 1}`,
-              }
-              return (
-                <button
-                  key={i}
-                  onClick={() => setActiveThumb(thumb)}
-                  className={`flex-shrink-0 w-20 overflow-hidden rounded-sm border transition-all duration-300 ${
-                    activeThumb?.id === thumb.id
-                      ? 'border-clay shadow-md'
-                      : 'border-charcoal-700/10'
-                  }`}
-                >
-                  <img
-                    src={thumb.src}
-                    alt={thumb.alt}
-                    className="w-full h-24 object-cover object-top"
-                  />
-                </button>
-              )
-            })}
+            {THUMBS.map((thumb) => (
+              <button
+                key={thumb.id}
+                onClick={() => setActiveThumb(thumb)}
+                className={`flex-shrink-0 w-20 overflow-hidden rounded-sm border transition-all duration-300 ${
+                  activeThumb?.id === thumb.id
+                    ? 'border-clay shadow-md'
+                    : 'border-charcoal-700/10'
+                }`}
+              >
+                <img
+                  src={thumb.src}
+                  alt={thumb.alt}
+                  className="w-full h-24 object-cover object-top"
+                />
+              </button>
+            ))}
           </div>
         </div>
       </main>
@@ -86,6 +71,7 @@ export default function Home() {
           <p className="font-display italic text-2xl font-light text-charcoal-700/30 tracking-wide">
             ReadyMe
           </p>
+
           <div className="flex gap-8">
             {['Privacy', 'Terms', 'Contact', 'Help'].map(item => (
               <a
@@ -97,6 +83,7 @@ export default function Home() {
               </a>
             ))}
           </div>
+
           <p className="font-mono text-[9px] tracking-wider text-charcoal-700/30">
             © 2025 ReadyMe
           </p>
