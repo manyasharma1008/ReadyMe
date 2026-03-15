@@ -85,7 +85,7 @@ export default function Home() {
           </div>
 
           <p className="font-mono text-[9px] tracking-wider text-charcoal-700/30">
-            © 2025 ReadyMe
+            © 2026 ReadyMe
           </p>
         </div>
       </footer>
