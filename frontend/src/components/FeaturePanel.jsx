@@ -30,10 +30,6 @@ const SECONDARY_TAGS = [
 export default function FeaturePanel({ currentLook }) {
   const navigate = useNavigate()
 
-  const goToPreview = () => {
-    navigate("/preview")
-  }
-
   return (
     <div className="flex flex-col gap-7 animate-fade-up stagger-3 py-2">
 
@@ -102,26 +98,6 @@ export default function FeaturePanel({ currentLook }) {
 
       {/* Divider */}
       <div className="h-px bg-charcoal-700/10" />
-
-      {/* CTA button (only one now) */}
-      <button
-  onClick={() => navigate("/preview")}
-  className="relative w-full mt-6 border border-charcoal-700/20 py-4
-  font-mono text-[10px] tracking-widest uppercase
-  overflow-hidden group"
->
-  <span
-    className="absolute inset-0 bg-black transform scale-x-0 origin-left
-    transition-transform duration-300 ease-out group-hover:scale-x-100"
-  />
-
-  <span
-    className="relative z-10 transition-colors duration-300
-    group-hover:text-white"
-  >
-    Explore Virtual Try-On
-  </span>
-</button>
 
       {/* Trust badges */}
       <div className="grid grid-cols-2 gap-3">
