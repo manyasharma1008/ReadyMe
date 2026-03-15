@@ -73,7 +73,7 @@ export default function Home() {
           </p>
 
           <div className="flex gap-8">
-            {['Privacy', 'Terms', 'Contact', 'Help'].map(item => (
+            {['Privacy', 'Terms'].map(item => (
               <a
                 key={item}
                 href="#"

@@ -1,4 +1,5 @@
 // FeaturePanel.jsx
+import { useNavigate } from "react-router-dom"
 
 const PRIMARY_FEATURES = [
   {
@@ -27,6 +28,12 @@ const SECONDARY_TAGS = [
 ]
 
 export default function FeaturePanel({ currentLook }) {
+  const navigate = useNavigate()
+
+  const goToPreview = () => {
+    navigate("/preview")
+  }
+
   return (
     <div className="flex flex-col gap-7 animate-fade-up stagger-3 py-2">
 
@@ -48,7 +55,9 @@ export default function FeaturePanel({ currentLook }) {
       {/* Divider */}
       <div className="flex items-center gap-3">
         <div className="h-px flex-1 bg-charcoal-700/10" />
-        <span className="font-mono text-[9px] tracking-widest text-charcoal-700/30 uppercase">SS 2025</span>
+        <span className="font-mono text-[9px] tracking-widest text-charcoal-700/30 uppercase">
+          SS 2025
+        </span>
         <div className="h-px flex-1 bg-charcoal-700/10" />
       </div>
 
@@ -94,15 +103,25 @@ export default function FeaturePanel({ currentLook }) {
       {/* Divider */}
       <div className="h-px bg-charcoal-700/10" />
 
-      {/* CTA button */}
-      <div className="flex flex-col gap-3">
-        <button className="cta-btn w-full border border-charcoal-800 text-charcoal-800 py-3 px-6 text-xs tracking-[0.2em] uppercase font-medium">
-          <span>Try ReadyMe Now</span>
-        </button>
-        <button className="w-full border border-charcoal-700/20 text-charcoal-700/60 py-3 px-6 text-xs tracking-[0.2em] uppercase font-light hover:border-clay/50 hover:text-clay transition-colors duration-300">
-          Explore Virtual Try-On
-        </button>
-      </div>
+      {/* CTA button (only one now) */}
+      <button
+  onClick={() => navigate("/preview")}
+  className="relative w-full mt-6 border border-charcoal-700/20 py-4
+  font-mono text-[10px] tracking-widest uppercase
+  overflow-hidden group"
+>
+  <span
+    className="absolute inset-0 bg-black transform scale-x-0 origin-left
+    transition-transform duration-300 ease-out group-hover:scale-x-100"
+  />
+
+  <span
+    className="relative z-10 transition-colors duration-300
+    group-hover:text-white"
+  >
+    Explore Virtual Try-On
+  </span>
+</button>
 
       {/* Trust badges */}
       <div className="grid grid-cols-2 gap-3">
@@ -115,12 +134,17 @@ export default function FeaturePanel({ currentLook }) {
           <div key={title} className="flex items-start gap-2 p-2">
             <span className="text-clay text-sm select-none">{icon}</span>
             <div>
-              <p className="font-sans text-[10px] font-medium tracking-wide text-charcoal-800">{title}</p>
-              <p className="font-sans text-[9px] text-charcoal-700/45 font-light">{sub}</p>
+              <p className="font-sans text-[10px] font-medium tracking-wide text-charcoal-800">
+                {title}
+              </p>
+              <p className="font-sans text-[9px] text-charcoal-700/45 font-light">
+                {sub}
+              </p>
             </div>
           </div>
         ))}
       </div>
+
     </div>
   )
 }

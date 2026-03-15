@@ -1,20 +1,27 @@
 import { useRef, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 
 export default function LandingSection({ image }) {
   const cardRef = useRef(null)
+  const navigate = useNavigate()
+
   const [tilt, setTilt] = useState({ x: 0, y: 0 })
   const [isHovering, setIsHovering] = useState(false)
 
   const handleMouseMove = (e) => {
     const card = cardRef.current
     if (!card) return
+
     const rect = card.getBoundingClientRect()
     const x = e.clientX - rect.left
     const y = e.clientY - rect.top
+
     const centerX = rect.width / 2
     const centerY = rect.height / 2
+
     const rotateY = ((x - centerX) / centerX) * 6
     const rotateX = -((y - centerY) / centerY) * 6
+
     setTilt({ x: rotateX, y: rotateY })
   }
 
@@ -25,21 +32,15 @@ export default function LandingSection({ image }) {
     setTilt({ x: 0, y: 0 })
   }
 
+
   return (
     <div className="relative flex flex-col items-center justify-center h-full animate-fade-up stagger-2">
 
-      {/* Zoom hint */}
-      <p className="font-mono text-[9px] tracking-widest uppercase text-charcoal-700/30 mb-4 select-none">
-        
-      </p>
-
-      {/* Main image card with tilt */}
+      {/* IMAGE CARD (NO CLICK NAVIGATION) */}
       <div
         ref={cardRef}
         className="relative w-full cursor-crosshair"
-        style={{
-          perspective: '1200px',
-        }}
+        style={{ perspective: '1200px' }}
         onMouseMove={handleMouseMove}
         onMouseEnter={handleMouseEnter}
         onMouseLeave={handleMouseLeave}
@@ -58,13 +59,11 @@ export default function LandingSection({ image }) {
             style={{ height: 'clamp(420px, 70vh, 680px)' }}
           />
 
-          {/* Subtle overlay on hover */}
           <div
             className="absolute inset-0 bg-gradient-to-t from-charcoal-700/20 to-transparent transition-opacity duration-300"
             style={{ opacity: isHovering ? 1 : 0 }}
           />
 
-          {/* Look number badge */}
           <div className="absolute bottom-4 left-4 flex items-center gap-2">
             <span className="font-mono text-[9px] tracking-widest text-cream-100/70 uppercase">
               Look {image?.id ? String(image.id).padStart(2, '0') : '01'}
@@ -74,7 +73,9 @@ export default function LandingSection({ image }) {
         </div>
       </div>
 
-      {/* Decorative script-style label below image — inspired by Mason's signature */}
+     
+
+      {/* Decorative label */}
       <div className="mt-6 text-center select-none">
         <span className="font-display italic text-4xl font-light text-charcoal-700/12 tracking-wide">
           virtual fashion
