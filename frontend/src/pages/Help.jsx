@@ -37,7 +37,7 @@ export default function Help() {
         {/* Header */}
         <section className="max-w-3xl mb-14 animate-fade-up stagger-1">
           <p className="font-mono text-[10px] tracking-[0.35em] text-charcoal-700/40 uppercase mb-4">
-            Support / Assistance
+            {/* Support / Assistance */}
           </p>
 
           <h1 className="font-display text-5xl font-light text-charcoal-800 mb-4">
