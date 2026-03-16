@@ -87,9 +87,9 @@ export default function Help() {
 
           <a
             href="/contact"
-            className="px-6 py-3 border border-charcoal-800 text-charcoal-800 font-mono text-[11px] tracking-widest uppercase hover:bg-charcoal-800 hover:text-cream-50 transition"
+            className="cta-btn border border-charcoal-800 px-6 py-3 font-mono text-[11px] tracking-widest uppercase"
           >
-            Contact Support
+            <span>Contact Support</span>
           </a>
 
         </section>

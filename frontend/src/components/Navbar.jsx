@@ -10,9 +10,8 @@ export default function Navbar() {
 
   return (
     <nav className="absolute top-0 w-full z-50 backdrop-blur-md px-6 md:px-10 lg:px-14 py-6 flex items-center justify-between">
-
       {/* Logo */}
-      <div className={`text-2xl font-medium ${linkColor}`}>
+      <div className={`logo-readyme ${linkColor}`}>
         ReadyMe
       </div>
 
@@ -34,20 +33,20 @@ export default function Navbar() {
       </button>
 
       {menuOpen && (
-  <div className="mobile-menu absolute top-full left-0 w-full bg-[#F5F1EB] shadow-md md:hidden flex flex-col items-center py-6 gap-6">
-    <Link to="/" className="nav-link" onClick={() => setMenuOpen(false)}>
-      HOME
-    </Link>
+        <div className="mobile-menu absolute top-full left-0 w-full bg-[#F5F1EB] shadow-md md:hidden flex flex-col items-center py-6 gap-6">
+          <Link to="/" className="nav-link" onClick={() => setMenuOpen(false)}>
+            HOME
+          </Link>
 
-    <Link to="/contact" className="nav-link" onClick={() => setMenuOpen(false)}>
-      CONTACT
-    </Link>
+          <Link to="/contact" className="nav-link" onClick={() => setMenuOpen(false)}>
+            CONTACT
+          </Link>
 
-    <Link to="/help" className="nav-link" onClick={() => setMenuOpen(false)}>
-      HELP
-    </Link>
-  </div>
-)}
+          <Link to="/help" className="nav-link" onClick={() => setMenuOpen(false)}>
+            HELP
+          </Link>
+        </div>
+      )}
 
     </nav>
   )
