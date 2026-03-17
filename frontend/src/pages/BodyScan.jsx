@@ -51,7 +51,7 @@ function BodyScan() {
 
     startCamera()
 
-    // cleanup when leaving page
+    
     return () => {
       stopCamera()
     }
