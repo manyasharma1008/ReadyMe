@@ -1,11 +1,19 @@
 import { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
+
 import Navbar from '../components/Navbar'
 import ThumbnailGallery, { THUMBS } from '../components/ThumbnailGallery'
 import LandingSection from '../components/LandingSection'
 import FeaturePanel from '../components/FeaturePanel'
 
 export default function Home() {
+
   const [activeThumb, setActiveThumb] = useState(THUMBS[0])
+  const navigate = useNavigate()
+
+  const handleTryOn = () => {
+    navigate("/camera")
+  }
 
   return (
     <div className="min-h-screen bg-[#e7e3dd]">
@@ -29,20 +37,24 @@ export default function Home() {
 
           {/* RIGHT — Feature info panel */}
           <aside className="sticky top-24 overflow-y-auto max-h-[calc(100vh-96px)] pr-1">
-            <FeaturePanel currentLook={activeThumb} />
+            <FeaturePanel
+              currentLook={activeThumb}
+              onTryOn={handleTryOn}
+            />
           </aside>
         </div>
 
         {/* ── Mobile/Tablet: stacked layout ───────────────────── */}
         <div className="md:hidden flex flex-col gap-6 pt-6">
 
-          {/* Feature panel first on mobile */}
-          <FeaturePanel currentLook={activeThumb} />
+          <FeaturePanel
+            currentLook={activeThumb}
+            onTryOn={handleTryOn}
+          />
 
-          {/* Main image */}
           <LandingSection image={activeThumb} />
 
-          {/* Thumbnails — horizontal scroll on mobile */}
+          {/* Thumbnails */}
           <div className="flex gap-3 overflow-x-auto thumb-scroll pb-2">
             {THUMBS.map((thumb) => (
               <button
@@ -65,7 +77,7 @@ export default function Home() {
         </div>
       </main>
 
-      {/* Footer strip */}
+      {/* Footer */}
       <footer id="contact" className="border-t border-charcoal-700/10 bg-cream-50">
         <div className="max-w-screen-xl mx-auto px-6 md:px-10 py-8 flex flex-col md:flex-row items-center justify-between gap-4">
           <p className="font-display italic text-2xl font-light text-charcoal-700/30 tracking-wide">
