@@ -1,5 +1,7 @@
 import { BrowserRouter as Router, Routes, Route } from "react-router-dom"
 
+import { AppProvider } from "./context/AppContext"
+
 import Home from "./pages/Home"
 import Contact from "./pages/Contact"
 import Help from "./pages/Help"
@@ -12,8 +14,9 @@ import PreviewRoom from "./components/PreviewRoom"
 
 function App() {
   return (
-    <Router>
-      <Routes>
+    <AppProvider>
+      <Router>
+        <Routes>
 
         {/* Landing Page */}
         <Route path="/" element={<Home />} />
@@ -36,6 +39,7 @@ function App() {
 
       </Routes>
     </Router>
+    </AppProvider>
   )
 }
 
