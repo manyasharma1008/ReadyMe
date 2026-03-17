@@ -94,7 +94,7 @@ function BodyScan() {
    */
   const handleCapture = async () => {
     clearError()
-
+    console.log("FINAL STEP - calling scan");
     // Capture current frame
     const imageData = captureFrame()
     if (!imageData) {
