@@ -9,13 +9,16 @@ import FeaturePanel from '../components/FeaturePanel'
 export default function Home() {
 
   const [activeThumb, setActiveThumb] = useState(THUMBS[0])
+  const [isScanned, setIsScanned] = useState(false)
+
   const navigate = useNavigate()
 
   const handleTryOn = () => {
-    navigate("/camera")
+    if (isScanned) {
+      navigate("/camera")
+    }
   }
 
-  // ✅ ADD THIS BLOCK
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
     const data = params.get("data")
@@ -24,42 +27,43 @@ export default function Home() {
       try {
         const product = JSON.parse(decodeURIComponent(data))
         console.log("PRODUCT FROM EXTENSION:", product)
-
-        // optional: store for later use
         localStorage.setItem("productData", JSON.stringify(product))
-
-        // redirect to preview page
         navigate("/preview")
-
       } catch (err) {
         console.error("Invalid product data")
       }
     }
+
+    // ✅ check scan status
+    const scanned = localStorage.getItem("bodyScanDone")
+    if (scanned === "true") {
+      setIsScanned(true)
+    }
+
   }, [])
-  // ✅ END
 
   return (
     <div className="min-h-screen bg-[#e7e3dd]">
       <Navbar />
 
-      {/* Main 3-column grid */}
       <main className="max-w-screen-xl mx-auto px-4 md:px-8 pt-20 pb-12">
 
-        {/* ── Desktop: 3-column layout ─────────────────────────── */}
+        {/* Desktop */}
         <div className="hidden md:grid grid-cols-[80px_1fr_340px] lg:grid-cols-[100px_1fr_380px] gap-6 lg:gap-10 items-start min-h-[calc(100vh-80px)] pt-6">
 
-          {/* LEFT — Thumbnail gallery */}
           <aside className="sticky top-24 pt-2 animate-fade-up stagger-1">
             <ThumbnailGallery active={activeThumb} onSelect={setActiveThumb} />
           </aside>
 
-          {/* CENTER — Large feature image */}
           <section className="flex flex-col">
-            <LandingSection image={activeThumb} />
+            <LandingSection 
+              image={activeThumb} 
+              isScanned={isScanned}
+            />
           </section>
 
-          {/* RIGHT — Feature info panel */}
-          <aside className="sticky top-24 overflow-y-auto max-h-[calc(100vh-96px)] pr-1">
+          {/* ✅ removed scroll */}
+          <aside className="sticky top-24 pr-1">
             <FeaturePanel
               currentLook={activeThumb}
               onTryOn={handleTryOn}
@@ -67,7 +71,7 @@ export default function Home() {
           </aside>
         </div>
 
-        {/* ── Mobile/Tablet: stacked layout ───────────────────── */}
+        {/* Mobile */}
         <div className="md:hidden flex flex-col gap-6 pt-6">
 
           <FeaturePanel
@@ -75,9 +79,11 @@ export default function Home() {
             onTryOn={handleTryOn}
           />
 
-          <LandingSection image={activeThumb} />
+          <LandingSection 
+            image={activeThumb} 
+            isScanned={isScanned}
+          />
 
-          {/* Thumbnails */}
           <div className="flex gap-3 overflow-x-auto thumb-scroll pb-2">
             {THUMBS.map((thumb) => (
               <button
@@ -100,8 +106,7 @@ export default function Home() {
         </div>
       </main>
 
-      {/* Footer */}
-      <footer id="contact" className="border-t border-charcoal-700/10 bg-cream-50">
+      <footer className="border-t border-charcoal-700/10 bg-cream-50">
         <div className="max-w-screen-xl mx-auto px-6 md:px-10 py-8 flex flex-col md:flex-row items-center justify-between gap-4">
           <p className="font-display italic text-2xl font-light text-charcoal-700/30 tracking-wide">
             ReadyMe
@@ -109,11 +114,7 @@ export default function Home() {
 
           <div className="flex gap-8">
             {['Privacy', 'Terms'].map(item => (
-              <a
-                key={item}
-                href="#"
-                className="font-mono text-[9px] tracking-widest uppercase text-charcoal-700/40 hover:text-rust transition-colors duration-300"
-              >
+              <a key={item} href="#" className="font-mono text-[9px] tracking-widest uppercase text-charcoal-700/40 hover:text-rust transition">
                 {item}
               </a>
             ))}

@@ -22,8 +22,6 @@ const SECONDARY_TAGS = [
   'Virtual Try-On',
   'AR Mirror',
   'AI Fit Prediction',
-  'Body Scan',
-  'Style Match',
 ]
 
 export default function FeaturePanel({ currentLook, onTryOn }) {
@@ -31,7 +29,6 @@ export default function FeaturePanel({ currentLook, onTryOn }) {
   const navigate = useNavigate()
 
   const handleTagClick = (tag) => {
-
     if (tag === "Virtual Try-On") {
       if (onTryOn) {
         onTryOn()
@@ -39,11 +36,6 @@ export default function FeaturePanel({ currentLook, onTryOn }) {
         navigate("/camera")
       }
     }
-
-    if (tag === "Body Scan") {
-      navigate("/camera")
-    }
-
   }
 
   return (
@@ -64,15 +56,6 @@ export default function FeaturePanel({ currentLook, onTryOn }) {
         </p>
       </div>
 
-      {/* Divider */}
-      <div className="flex items-center gap-3">
-        <div className="h-px flex-1 bg-charcoal-700/10" />
-        <span className="font-mono text-[9px] tracking-widest text-charcoal-700/30 uppercase">
-          SS 2025
-        </span>
-        <div className="h-px flex-1 bg-charcoal-700/10" />
-      </div>
-
       {/* Description */}
       <p className="font-sans text-sm leading-relaxed text-charcoal-700/70 font-light max-w-xs">
         ReadyMe lets you visualise any outfit in a photorealistic 3D environment
@@ -80,37 +63,41 @@ export default function FeaturePanel({ currentLook, onTryOn }) {
         unique body shape in seconds.
       </p>
 
-      {/* Primary feature cards */}
-      <div className="flex flex-col gap-3" id="features">
+      {/* Primary Features */}
+      <div className="flex flex-col gap-3">
         {PRIMARY_FEATURES.map((f, i) => (
           <div
             key={f.label}
-            className={`feature-tag flex items-start gap-4 px-4 py-3 bg-cream-50 border border-charcoal-700/8 rounded-sm cursor-default animate-fade-up stagger-${i + 3}`}
+            className="feature-tag flex items-start gap-4 px-4 py-3 bg-cream-50 border border-charcoal-700/8 rounded-sm"
           >
-            <span className="text-clay text-lg mt-0.5 select-none">{f.icon}</span>
+            <span className="text-clay text-lg">{f.icon}</span>
             <div>
-              <p className="font-sans text-xs font-medium tracking-wider uppercase text-charcoal-800">
-                {f.label}
-              </p>
-              <p className="font-sans text-xs text-charcoal-700/55 mt-0.5 font-light leading-relaxed">
-                {f.desc}
-              </p>
+              <p className="text-xs uppercase">{f.label}</p>
+              <p className="text-xs text-charcoal-700/55">{f.desc}</p>
             </div>
           </div>
         ))}
       </div>
 
-      {/* Secondary tags */}
+      {/* Secondary Tags (chips style) */}
       <div className="flex flex-wrap gap-2">
-        {SECONDARY_TAGS.map(tag => (
-          <span
-            key={tag}
-            onClick={() => handleTagClick(tag)}
-            className="feature-tag inline-flex items-center px-3 py-1.5 bg-cream-200 border border-charcoal-700/10 rounded-sm font-mono text-[10px] tracking-widest uppercase text-charcoal-700/60 cursor-pointer hover:bg-cream-100 transition"
-          >
-            {tag}
-          </span>
-        ))}
+        {SECONDARY_TAGS.map(tag => {
+          const isClickable = tag === "Virtual Try-On"
+
+          return (
+            <span
+              key={tag}
+              onClick={() => isClickable && handleTagClick(tag)}
+              className={`feature-tag inline-flex items-center px-3 py-1.5 rounded-sm font-mono text-[10px] tracking-widest uppercase transition
+  ${isClickable 
+    ? "bg-cream-200 border border-charcoal-700/10 hover:bg-cream-100 text-charcoal-700/60 cursor-default"
+    : "bg-cream-200 border border-charcoal-700/10 text-charcoal-700/40 cursor-default"
+  }`}
+            >
+              {tag}
+            </span>
+          )
+        })}
       </div>
 
       {/* Divider */}
@@ -125,14 +112,10 @@ export default function FeaturePanel({ currentLook, onTryOn }) {
           ['◐', '3D Engine', 'Real-time rendering'],
         ].map(([icon, title, sub]) => (
           <div key={title} className="flex items-start gap-2 p-2">
-            <span className="text-clay text-sm select-none">{icon}</span>
+            <span className="text-clay text-sm">{icon}</span>
             <div>
-              <p className="font-sans text-[10px] font-medium tracking-wide text-charcoal-800">
-                {title}
-              </p>
-              <p className="font-sans text-[9px] text-charcoal-700/45 font-light">
-                {sub}
-              </p>
+              <p className="text-[10px]">{title}</p>
+              <p className="text-[9px] text-charcoal-700/45">{sub}</p>
             </div>
           </div>
         ))}

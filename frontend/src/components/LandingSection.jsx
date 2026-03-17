@@ -1,7 +1,7 @@
 import { useRef, useState } from "react"
 import { useNavigate } from "react-router-dom"
 
-export default function LandingSection({ image }) {
+export default function LandingSection({ image, isScanned }) {
   const cardRef = useRef(null)
   const navigate = useNavigate()
 
@@ -9,49 +9,33 @@ export default function LandingSection({ image }) {
   const [isHovering, setIsHovering] = useState(false)
 
   const handleMouseMove = (e) => {
-    const card = cardRef.current
-    if (!card) return
-
-    const rect = card.getBoundingClientRect()
+    const rect = cardRef.current.getBoundingClientRect()
     const x = e.clientX - rect.left
     const y = e.clientY - rect.top
 
-    const centerX = rect.width / 2
-    const centerY = rect.height / 2
-
-    const rotateY = ((x - centerX) / centerX) * 6
-    const rotateX = -((y - centerY) / centerY) * 6
+    const rotateY = ((x - rect.width / 2) / (rect.width / 2)) * 6
+    const rotateX = -((y - rect.height / 2) / (rect.height / 2)) * 6
 
     setTilt({ x: rotateX, y: rotateY })
-  }
-
-  const handleMouseEnter = () => setIsHovering(true)
-
-  const handleMouseLeave = () => {
-    setIsHovering(false)
-    setTilt({ x: 0, y: 0 })
   }
 
   return (
     <div className="relative flex flex-col items-center justify-center h-full animate-fade-up stagger-2">
 
-      {/* IMAGE CARD */}
+      {/* IMAGE */}
       <div
         ref={cardRef}
-        className="relative w-full cursor-crosshair"
+        className="relative w-full"
         style={{ perspective: "1200px" }}
         onMouseMove={handleMouseMove}
-        onMouseEnter={handleMouseEnter}
-        onMouseLeave={handleMouseLeave}
+        onMouseEnter={() => setIsHovering(true)}
+        onMouseLeave={() => {
+          setIsHovering(false)
+          setTilt({ x: 0, y: 0 })
+        }}
       >
         <div
-          className="tilt-card relative overflow-hidden rounded-md shadow-[0_20px_60px_rgba(44,43,40,0.12)]"
-          style={{
-            transform: `rotateX(${tilt.x}deg) rotateY(${tilt.y}deg) scale(${isHovering ? 1.02 : 1})`,
-            transition: isHovering
-              ? "transform 0.1s ease-out"
-              : "transform 0.5s ease-out",
-          }}
+          className="relative overflow-hidden rounded-md shadow-[0_20px_60px_rgba(44,43,40,0.12)]"
         >
           <img
             src={
@@ -63,31 +47,53 @@ export default function LandingSection({ image }) {
             style={{ height: "clamp(420px, 70vh, 680px)" }}
           />
 
-          <div
-            className="absolute inset-0 bg-gradient-to-t from-charcoal-700/20 to-transparent transition-opacity duration-300"
-            style={{ opacity: isHovering ? 1 : 0 }}
-          />
+          {/* ✅ ADD THIS OVERLAY */}
+          <div className="absolute inset-0 bg-gradient-to-t from-charcoal-700/20 to-transparent" />
 
+          {/* ✅ ADD THIS LOOK LABEL */}
           <div className="absolute bottom-4 left-4 flex items-center gap-2">
             <span className="font-mono text-[9px] tracking-widest text-cream-100/70 uppercase">
               Look {image?.id ? String(image.id).padStart(2, "0") : "01"}
             </span>
             <div className="w-8 h-px bg-cream-100" />
           </div>
+
         </div>
       </div>
 
-      {/* MAIN CTA BUTTON */}
-      <button
-        onClick={() => navigate("/preview")}
-        className="cta-btn mt-10 border border-charcoal-700 px-10 py-3 font-mono text-xs tracking-[0.25em] uppercase text-charcoal-700"
-      >
-        <span>EXPLORE VIRTUAL TRY-ON</span>
-      </button>
+      {/* BUTTONS */}
+      <div className="mt-10 flex items-center gap-4">
 
-      {/* Decorative label */}
-      <div className="mt-6 text-center select-none">
-        <span className="font-display italic text-4xl font-light text-charcoal-700/12 tracking-wide">
+        {/* Body Scan */}
+        <button
+          onClick={() => navigate("/camera")}
+          className="cta-btn border border-charcoal-700 px-8 py-3 font-mono text-xs tracking-[0.2em] uppercase text-charcoal-700"
+        >
+          <span>BODY SCAN</span>
+        </button>
+
+        {/* Explore */}
+        <button
+          onClick={() => isScanned && navigate("/preview")}
+          className={`px-8 py-3 font-mono text-xs tracking-[0.25em] uppercase transition
+            ${isScanned
+              ? "cta-btn border border-charcoal-700 text-charcoal-700"
+              : "border border-charcoal-700/20 text-charcoal-700/30 cursor-not-allowed"
+            }`}
+        >
+          <span>EXPLORE VIRTUAL TRY-ON</span>
+        </button>
+
+      </div>
+
+      {!isScanned && (
+        <p className="text-xs text-charcoal-700/40 mt-2">
+          Complete body scan to unlock try-on
+        </p>
+      )}
+
+      <div className="mt-6 text-center">
+        <span className="font-display italic text-4xl text-charcoal-700/12">
           virtual fashion
         </span>
       </div>
