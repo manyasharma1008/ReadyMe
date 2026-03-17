@@ -1,65 +1,68 @@
 import { Canvas } from "@react-three/fiber"
-import { OrbitControls, useGLTF } from "@react-three/drei"
+import { OrbitControls, useGLTF, Center } from "@react-three/drei"
 import { Suspense } from "react"
-import Navbar from "./Navbar"
 
-function HumanModel() {
+function Avatar() {
   const { scene } = useGLTF("/models/man.glb")
 
   return (
-    <primitive
-      object={scene}
-      scale={0.015}
-      position={[0, -1.9, 0]}
-      rotation={[0, Math.PI, 0]}
-    />
-  )
-}
-
-function ModelViewer() {
-  return (
-    <Canvas camera={{ position: [0, 1.2, 4.5], fov: 50 }}>
-      <ambientLight intensity={1.2} />
-      <directionalLight position={[3, 5, 3]} intensity={2} />
-
-      <Suspense fallback={null}>
-        <HumanModel />
-      </Suspense>
-
-      <OrbitControls
-        enableZoom={false}
-        enablePan={false}
-        minPolarAngle={Math.PI / 2}
-        maxPolarAngle={Math.PI / 2}
-      />
-    </Canvas>
+    <Center>
+      <primitive object={scene} scale={1.5} />
+    </Center>
   )
 }
 
 export default function PreviewRoom() {
   return (
-    <div className="w-screen h-screen overflow-hidden relative">
+    <div style={{ display: "flex", height: "100vh", background: "#e7e3dd" }}>
 
-      {/* Navbar */}
-      <Navbar />
+      {/* LEFT PANEL */}
+      <div style={{ width: "220px", padding: "20px" }}>
+        <h3>Adjust Avatar</h3>
+        <button>Upload Photo</button>
+        <button>Adjust Height</button>
+        <button>Reset Avatar</button>
+      </div>
 
-      {/* Background Image */}
-      <img
-        src="/closet.jpg"
-        alt="Virtual fitting room"
-        className="absolute inset-0 w-full h-full object-cover object-bottom -z-10"
-      />
+      {/* CENTER MODEL */}
+      <div style={{ flex: 1 }}>
 
-      {/* 3D Model Viewer */}
-      <div className="absolute top-24 left-0 right-0 bottom-0 flex items-center justify-center">
-  <div className="w-[90vw] h-full max-w-[900px]">
-    <ModelViewer />
-  </div>
-</div>
+        <Canvas
+          camera={{ position: [0, 1.6, 3], fov: 45 }}
+        >
 
+          {/* lighting */}
+          <ambientLight intensity={0.7} />
+          <directionalLight position={[3, 5, 2]} intensity={1} />
+
+          {/* model */}
+          <Suspense fallback={null}>
+            <Avatar />
+          </Suspense>
+
+          {/* ground */}
+          <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -1, 0]}>
+            <planeGeometry args={[10, 10]} />
+            <meshStandardMaterial color="#ddd8d2" />
+          </mesh>
+
+          <OrbitControls />
+
+        </Canvas>
+
+      </div>
+
+      {/* RIGHT PANEL */}
+      <div style={{ width: "220px", padding: "20px" }}>
+        <h3>Select Outfit</h3>
+
+        <div>Jacket</div>
+        <div>Hoodie</div>
+        <div>Shirt</div>
+        <div>Dress</div>
+
+      </div>
 
     </div>
   )
 }
-
-useGLTF.preload("/models/man.glb")

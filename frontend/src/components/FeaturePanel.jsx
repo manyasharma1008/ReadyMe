@@ -1,4 +1,3 @@
-// FeaturePanel.jsx
 import { useNavigate } from "react-router-dom"
 
 const PRIMARY_FEATURES = [
@@ -27,8 +26,25 @@ const SECONDARY_TAGS = [
   'Style Match',
 ]
 
-export default function FeaturePanel({ currentLook }) {
+export default function FeaturePanel({ currentLook, onTryOn }) {
+
   const navigate = useNavigate()
+
+  const handleTagClick = (tag) => {
+
+    if (tag === "Virtual Try-On") {
+      if (onTryOn) {
+        onTryOn()
+      } else {
+        navigate("/camera")
+      }
+    }
+
+    if (tag === "Body Scan") {
+      navigate("/camera")
+    }
+
+  }
 
   return (
     <div className="flex flex-col gap-7 animate-fade-up stagger-3 py-2">
@@ -89,7 +105,8 @@ export default function FeaturePanel({ currentLook }) {
         {SECONDARY_TAGS.map(tag => (
           <span
             key={tag}
-            className="feature-tag inline-flex items-center px-3 py-1.5 bg-cream-200 border border-charcoal-700/10 rounded-sm font-mono text-[10px] tracking-widest uppercase text-charcoal-700/60 cursor-default"
+            onClick={() => handleTagClick(tag)}
+            className="feature-tag inline-flex items-center px-3 py-1.5 bg-cream-200 border border-charcoal-700/10 rounded-sm font-mono text-[10px] tracking-widest uppercase text-charcoal-700/60 cursor-pointer hover:bg-cream-100 transition"
           >
             {tag}
           </span>
