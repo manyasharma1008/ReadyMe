@@ -1,0 +1,1797 @@
+================================================================================
+                        ReadyMe Backend - Complete Documentation
+================================================================================
+
+================================================================================
+                                 TABLE OF CONTENTS
+================================================================================
+
+1.  PROJECT OVERVIEW
+2.  TECHNOLOGY STACK
+3.  DIRECTORY STRUCTURE
+4.  ENTRY POINT (main.py)
+5.  ROUTERS
+    5.1 scan.py - Body Measurement Scanning
+    5.2 size.py - Size Prediction
+    5.3 product.py - Product Size Chart Extraction
+    5.4 profile.py - User Profile CRUD
+6.  SERVICES
+    6.1 mediapipe_extractor.py - Body Landmark Extraction
+    6.2 preprocessing.py - Image Preprocessing Pipeline
+    6.3 measurement.py - Body Measurement Calculations
+    6.4 chart_matcher.py - Size Chart Matching Algorithm
+    6.5 fit_model.py - TensorFlow ML Model
+7.  DATA MODELS (schemas.py)
+8.  DATABASE LAYER (supabase.py)
+9.  AUTHENTICATION (jwt_middleware.py)
+10. DEPENDENCIES (requirements.txt)
+11. DATA FLOW DIAGRAMS
+12. API ENDPOINTS SUMMARY
+13. ENVIRONMENT VARIABLES
+
+================================================================================
+                               1. PROJECT OVERVIEW
+================================================================================
+
+ReadyMe is a browser extension that helps users find the correct clothing size
+by scanning their body and matching measurements to brand size charts.
+
+The backend provides:
+  - Body measurement extraction from images using MediaPipe
+  - Size prediction with confidence scores
+  - Product size chart extraction from e-commerce websites
+  - User measurement storage with Supabase
+  - JWT authentication for secure profile management
+
+Primary Use Case:
+  User uploads a full-body photo -> Backend extracts measurements ->
+  Measurements matched against size charts -> User gets size recommendation
+
+================================================================================
+                             2. TECHNOLOGY STACK
+================================================================================
+
+CORE FRAMEWORK:
+  - FastAPI: Modern async Python web framework with automatic OpenAPI docs
+  - Python 3.10: Type hints, pattern matching, improved error messages
+  - Pydantic 2.9: Data validation and serialization
+
+IMAGE PROCESSING:
+  - OpenCV (opencv-python-headless): Image manipulation, color conversion
+  - MediaPipe: Google's ML solution for body pose detection
+  - Pillow: Image loading and format handling
+  - NumPy: Array operations for image data
+
+WEB SCRAPING:
+  - BeautifulSoup4: HTML parsing for size chart extraction
+  - lxml: Fast XML/HTML parser
+  - Requests: HTTP client for fetching product pages
+
+DATABASE & AUTH:
+  - Supabase: PostgreSQL database with built-in auth
+  - python-jose: JWT token validation
+
+ML (OPTIONAL):
+  - TensorFlow/Keras: Neural network for fit prediction
+  - Note: API works without TensorFlow, returns defaults
+
+================================================================================
+                            3. DIRECTORY STRUCTURE
+================================================================================
+
+backend/
+|
++-- app/
+|   +-- __init__.py              # Package marker
+|   +-- main.py                  # FastAPI entry point
+|   |
+|   +-- routers/
+|   |   +-- __init__.py
+|   |   +-- scan.py              # Body measurement endpoints
+|   |   +-- size.py              # Size prediction endpoints
+|   |   +-- product.py           # Product size chart extraction
+|   |   +-- profile.py           # User profile CRUD
+|   |
+|   +-- services/
+|   |   +-- __init__.py
+|   |   +-- mediapipe_extractor.py  # MediaPipe body detection
+|   |   +-- preprocessing.py        # Image preprocessing
+|   |   +-- measurement.py          # Measurement calculations
+|   |   +-- chart_matcher.py        # Size chart matching
+|   |   +-- fit_model.py            # TensorFlow fit prediction
+|   |
+|   +-- models/
+|   |   +-- __init__.py
+|   |   +-- schemas.py            # Pydantic data models
+|   |   +-- weights/              # ML model weights directory
+|   |       +-- fit_model.keras   # Trained model (auto-generated)
+|   |       +-- training_data.json # Feedback training data
+|   |
+|   +-- db/
+|   |   +-- __init__.py
+|   |   +-- supabase.py           # Supabase client
+|   |
+|   +-- auth/
+|       +-- __init__.py
+|       +-- jwt_middleware.py     # JWT authentication
+|
++-- requirements.txt              # Python dependencies
++-- runtime.txt                   # Python version for deployment
++-- .env                          # Environment variables (not committed)
++-- understand.txt                # This documentation file
+
+================================================================================
+                          4. ENTRY POINT (main.py)
+================================================================================
+
+FILE: app/main.py
+
+This is the FastAPI application entry point that:
+1. Creates the FastAPI app instance
+2. Configures CORS middleware
+3. Registers all routers
+4. Defines health check endpoints
+
+--------------------------------------------------------------------------------
+CODE BREAKDOWN:
+--------------------------------------------------------------------------------
+
+APP CREATION:
+    app = FastAPI(
+        title="ReadyMe Body Measurement API",
+        description="API for body measurement scanning and size prediction",
+        version="1.0.0"
+    )
+
+CORS MIDDLEWARE:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],           # Allow all origins (dev mode)
+        allow_credentials=True,         # Allow cookies
+        allow_methods=["*"],            # Allow all HTTP methods
+        allow_headers=["*"],            # Allow all headers
+    )
+
+    Purpose: Browser extensions need CORS to make cross-origin requests.
+    The wildcard "*" allows any extension or web app to call the API.
+
+ROUTER REGISTRATION:
+    app.include_router(scan.router, prefix="/scan", tags=["scan"])
+    app.include_router(size.router, prefix="/size", tags=["size"])
+    app.include_router(product.router, prefix="/product", tags=["product"])
+    app.include_router(profile.router, prefix="/profile", tags=["profile"])
+
+    Each router handles a specific domain:
+    - /scan/*  -> Body measurement extraction
+    - /size/*  -> Size prediction and validation
+    - /product/* -> Size chart extraction from URLs
+    - /profile/* -> User profile CRUD (requires auth)
+
+ENDPOINTS:
+    GET  /              -> Root endpoint, returns API status
+    GET  /health        -> Health check for monitoring
+    GET  /test-db       -> Test database connection
+
+RUNNING THE SERVER:
+    uvicorn app.main:app --reload
+    Access docs at: http://localhost:8000/docs
+
+================================================================================
+                                5. ROUTERS
+================================================================================
+
+================================================================================
+                      5.1 scan.py - Body Measurement Scanning
+================================================================================
+
+FILE: app/routers/scan.py
+
+Provides endpoints for analyzing body images and extracting measurements.
+
+--------------------------------------------------------------------------------
+ENDPOINTS:
+--------------------------------------------------------------------------------
+
+POST /scan/measure
+    Description: Analyze uploaded image file and extract body measurements
+    Content-Type: multipart/form-data
+
+    Request:
+        - image: UploadFile (required) - Image file of full body
+
+    Processing Pipeline:
+        1. Read uploaded image file
+        2. Convert to PIL Image then numpy array
+        3. Preprocess (resize, normalize, denoise)
+        4. Extract body landmarks using MediaPipe
+        5. Calculate measurements from landmarks
+
+    Response (ScanMeasureResponse):
+        {
+            "success": true,
+            "measurements": {
+                "height": 172.5,
+                "chest": 96.3,
+                "waist": 82.1,
+                "hips": 98.4,
+                "shoulder_width": 42.7
+            }
+        }
+
+    Errors:
+        - 400: Could not detect body in image
+        - 500: Error processing image
+
+--------------------------------------------------------------------------------
+
+POST /scan/measure-base64
+    Description: Analyze base64-encoded image and extract measurements
+    Content-Type: application/json
+
+    Request Body:
+        - image_data: string (required) - Base64 encoded image
+
+    Processing: Same pipeline as /scan/measure
+
+    Response: Same as /scan/measure
+
+    Use Case: Browser extensions often send images as base64 strings
+
+--------------------------------------------------------------------------------
+CODE EXPLANATION:
+--------------------------------------------------------------------------------
+
+IMAGE LOADING:
+    contents = await image.read()
+    image_pil = Image.open(io.BytesIO(contents))
+    image_array = np.array(image_pil)
+
+    Why: FastAPI's UploadFile needs to be read as bytes, then converted to
+    PIL Image for format handling, then to numpy array for OpenCV.
+
+PREPROCESSING:
+    preprocessed = preprocess_image(image_array)
+
+    The preprocessing function (in services/preprocessing.py):
+    1. Resizes to 640x480 (optimal for MediaPipe)
+    2. Normalizes brightness using CLAHE
+    3. Denoises using fastNlMeansDenoisingColored
+
+LANDMARK EXTRACTION:
+    landmarks = extract_body_landmarks(preprocessed)
+
+    Returns 33 body landmarks with x, y, z coordinates and visibility.
+    Returns None if no body detected.
+
+MEASUREMENT CALCULATION:
+    measurements = calculate_measurements(landmarks, image_array.shape)
+
+    Converts landmark positions to actual measurements in cm using
+    human proportion ratios and pixel-to-cm conversion.
+
+================================================================================
+                        5.2 size.py - Size Prediction
+================================================================================
+
+FILE: app/routers/size.py
+
+Provides endpoints for predicting clothing sizes and validating fit.
+
+--------------------------------------------------------------------------------
+ENDPOINTS:
+--------------------------------------------------------------------------------
+
+POST /size/predict
+    Description: Predict best size based on body measurements and size chart
+
+    Request Body (SizePredictionRequest):
+        {
+            "measurements": {
+                "height": 175.0,
+                "chest": 98.0,
+                "waist": 84.0,
+                "hips": 100.0,
+                "shoulder_width": 44.0
+            },
+            "size_chart": null,           // Optional brand-specific chart
+            "use_standard_chart": true    // Use built-in chart if no brand chart
+        }
+
+    Response (SizePredictionResponse):
+        {
+            "success": true,
+            "recommendations": [
+                {
+                    "size": "M",
+                    "confidence": 85.5,
+                    "fit_type": "perfect",
+                    "explanation": "Best match for shirts: Your measurements fall within the M range for height, chest. This size should fit well.",
+                    "alternative_size": "L"
+                }
+            ],
+            "measurements_used": ["height", "chest", "waist", "hips", "shoulder_width"],
+            "warnings": null
+        }
+
+--------------------------------------------------------------------------------
+
+POST /size/validate
+    Description: Validate if user's current size matches their measurements
+
+    Request Body (SizeValidationRequest):
+        {
+            "measurements": { ... },
+            "current_size": "M",
+            "size_chart": { ... }
+        }
+
+    Response (SizeValidationResponse):
+        {
+            "success": true,
+            "is_match": true,
+            "recommended_size": null,
+            "fit_score": 78.5,
+            "explanation": "Your measurements show 3 of 5 measurements in the M range. Good fit"
+        }
+
+--------------------------------------------------------------------------------
+
+GET /size/standard-charts
+    Description: List available standard size charts
+
+    Response:
+        {
+            "categories": ["shirts", "pants", "dresses", "jackets"],
+            "genders": ["men", "women"],
+            "charts": { ... }
+        }
+
+--------------------------------------------------------------------------------
+
+GET /size/chart/{category}
+    Description: Get standard size chart for a category
+
+    Parameters:
+        - category: shirts, pants, dresses, jackets
+        - gender: men, women (default: men)
+
+    Response: Complete SizeChart object
+
+--------------------------------------------------------------------------------
+
+POST /size/feedback
+    Description: Submit fit feedback to improve ML model
+
+    Request Body:
+        - measurements: dict - User's body measurements
+        - category: str - Garment category
+        - size: str - Size worn
+        - fit_rating: str - One of: too_tight, tight, perfect, loose, too_loose
+
+    Response:
+        {
+            "success": true,
+            "message": "Feedback saved. Will be used to improve future recommendations."
+        }
+
+--------------------------------------------------------------------------------
+
+POST /size/model/train
+    Description: Train the fit prediction model on accumulated feedback
+
+    Parameters:
+        - epochs: int (default: 50)
+        - batch_size: int (default: 16)
+
+    Response:
+        {
+            "success": true,
+            "message": "Model trained on 150 samples",
+            "final_loss": 0.0234,
+            "samples_trained": 150
+        }
+
+--------------------------------------------------------------------------------
+
+GET /size/model/stats
+    Description: Get training data statistics
+
+    Response:
+        {
+            "total_samples": 150,
+            "categories": {"shirts": 80, "pants": 50, "jackets": 20},
+            "fit_ratings": {"perfect": 60, "loose": 40, ...},
+            "model_exists": true
+        }
+
+--------------------------------------------------------------------------------
+
+POST /size/predict-fit
+    Description: Predict fit score for specific size using ML model
+
+    Request Body:
+        - measurements: dict
+        - category: str
+        - size: str
+
+    Response:
+        {
+            "success": true,
+            "fit_score": 0.52,
+            "interpretation": "perfect",
+            "confidence": "high",
+            "size": "M",
+            "category": "shirts"
+        }
+
+================================================================================
+                   5.3 product.py - Product Size Chart Extraction
+================================================================================
+
+FILE: app/routers/product.py
+
+Extracts size charts from e-commerce product pages.
+
+--------------------------------------------------------------------------------
+SUPPORTED PLATFORMS:
+--------------------------------------------------------------------------------
+
+Platform      | Domain                  | Parser Function
+--------------|-------------------------|---------------------------
+Amazon        | amazon.in, amazon.com   | extract_size_chart_amazon()
+Myntra        | myntra.com              | extract_size_chart_myntra()
+Flipkart      | flipkart.com            | extract_size_chart_flipkart()
+Meesho        | meesho.com              | Generic parser
+Ajio          | ajio.com                | Generic parser
+
+--------------------------------------------------------------------------------
+SIZE PATTERNS DETECTED:
+--------------------------------------------------------------------------------
+
+    SIZE_PATTERNS = {
+        "alpha": ["XS", "S", "M", "L", "XL", "XXL", "XXXL"],
+        "numeric": ["24", "25", ..., "45"],  // Numeric sizes
+        "eu": ["32", "33", ..., "57"],       // European sizes
+        "uk": ["6", "7", ..., "19"],         // UK sizes
+        "us": ["0", "1", ..., "19"]          // US sizes
+    }
+
+--------------------------------------------------------------------------------
+ENDPOINTS:
+--------------------------------------------------------------------------------
+
+POST /product/extract
+    Description: Extract size chart from product URL
+
+    Request Body (ProductExtractRequest):
+        {
+            "url": "https://www.amazon.in/product/...",
+            "category": "shirts"  // Optional, auto-detected if not provided
+        }
+
+    Processing:
+        1. Fetch HTML from URL with browser User-Agent
+        2. Detect platform (amazon, myntra, flipkart, etc.)
+        3. Parse HTML to extract size table
+        4. Convert to standardized SizeChart format
+        5. Fallback to standard chart if extraction fails
+
+    Response (ProductExtractResponse):
+        {
+            "success": true,
+            "product": {
+                "name": "Cotton Slim Fit Shirt",
+                "brand": "Allen Solly",
+                "category": "shirts",
+                "gender": "men",
+                "url": "https://..."
+            },
+            "size_chart": {
+                "brand": "Allen Solly",
+                "category": "shirts",
+                "gender": "men",
+                "sizes": [
+                    {"size": "S", "chest_min": 91, "chest_max": 96, ...},
+                    {"size": "M", "chest_min": 96, "chest_max": 101, ...}
+                ]
+            },
+            "message": "Size chart extracted from amazon",
+            "warnings": null
+        }
+
+    Errors:
+        - Timeout: Request timed out
+        - RequestException: Failed to fetch page
+        - BeautifulSoup not installed
+
+--------------------------------------------------------------------------------
+
+GET /product/supported-platforms
+    Description: List supported e-commerce platforms
+
+    Response:
+        {
+            "platforms": [
+                {"name": "Amazon", "domain": "amazon.in, amazon.com"},
+                {"name": "Myntra", "domain": "myntra.com"},
+                ...
+            ],
+            "note": "Generic parsing works on most e-commerce sites"
+        }
+
+--------------------------------------------------------------------------------
+KEY HELPER FUNCTIONS:
+--------------------------------------------------------------------------------
+
+detect_platform(url: str) -> str
+    Returns: "amazon", "myntra", "flipkart", "meesho", "ajio", or "generic"
+
+extract_brand_from_url(url: str) -> Optional[str]
+    Extracts brand from URL path segments
+
+detect_category_from_url(url: str, html: str) -> str
+    Uses keyword matching: shirt->shirts, jean->pants, etc.
+
+detect_gender_from_url(url: str, html: str) -> Optional[str]
+    Returns: "men", "women", "kids", or None
+
+parse_size_table_generic(table_html: str) -> list[dict]
+    Parses any HTML table containing size data
+
+================================================================================
+                     5.4 profile.py - User Profile CRUD
+================================================================================
+
+FILE: app/routers/profile.py
+
+Manages user body profiles with JWT authentication.
+
+--------------------------------------------------------------------------------
+AUTHENTICATION:
+--------------------------------------------------------------------------------
+
+All endpoints require JWT token in Authorization header:
+    Authorization: Bearer <supabase_jwt_token>
+
+The JWT is validated by get_current_user dependency which:
+1. Extracts token from Authorization header
+2. Validates signature using SUPABASE_JWT_SECRET
+3. Extracts user_id from 'sub' claim
+4. Returns TokenData object
+
+--------------------------------------------------------------------------------
+ENDPOINTS:
+--------------------------------------------------------------------------------
+
+POST /profile/save
+    Description: Save body measurements for a user
+
+    Request Body (ProfileSaveRequest):
+        {
+            "user_id": "uuid-from-supabase",
+            "measurements": {
+                "height": 175.0,
+                "chest": 98.0,
+                "waist": 84.0,
+                "hips": 100.0,
+                "shoulder_width": 44.0
+            },
+            "name": "My Profile"  // Optional
+        }
+
+    Response (ProfileResponse):
+        {
+            "id": "profile-uuid",
+            "user_id": "user-uuid",
+            "measurements": { ... },
+            "name": "My Profile",
+            "created_at": "2024-01-15T10:30:00",
+            "updated_at": "2024-01-15T10:30:00"
+        }
+
+    Status: 201 Created
+
+--------------------------------------------------------------------------------
+
+GET /profile/get
+    Description: Get authenticated user's profile
+    Auth: Required (JWT)
+
+    Response: Same as POST /profile/save
+
+    Behavior: Returns the most recent profile for authenticated user
+
+    Errors:
+        - 401: Not authenticated
+        - 404: Profile not found
+
+--------------------------------------------------------------------------------
+
+PUT /profile/update
+    Description: Update authenticated user's profile
+    Auth: Required (JWT)
+
+    Request Body:
+        {
+            "height": 176.0,    // Updated measurements
+            "chest": 99.0,
+            "waist": 85.0,
+            "hips": 101.0,
+            "shoulder_width": 45.0
+        }
+
+    Query Parameters:
+        - name: Optional new profile name
+
+    Response: Updated ProfileResponse
+
+--------------------------------------------------------------------------------
+DATABASE OPERATIONS:
+--------------------------------------------------------------------------------
+
+Save Profile:
+    supabase.table("body_profiles").insert(profile_data).execute()
+
+Get Profile:
+    supabase.table("body_profiles")
+        .select("*")
+        .eq("user_id", current_user.user_id)
+        .order("created_at", desc=True)
+        .limit(1)
+        .execute()
+
+Update Profile:
+    supabase.table("body_profiles")
+        .update(update_data)
+        .eq("id", profile_id)
+        .execute()
+
+================================================================================
+                                6. SERVICES
+================================================================================
+
+================================================================================
+             6.1 mediapipe_extractor.py - Body Landmark Extraction
+================================================================================
+
+FILE: app/services/mediapipe_extractor.py
+
+Uses Google's MediaPipe library to detect body pose landmarks.
+
+--------------------------------------------------------------------------------
+CLASS: BodyLandmarkExtractor
+--------------------------------------------------------------------------------
+
+Initialization:
+    self.mp_pose = mp.solutions.pose
+    self.pose = self.mp_pose.Pose(
+        static_image_mode=True,      # Process single images, not video
+        model_complexity=2,          # Highest accuracy model
+        enable_segmentation=False,   # Don't segment background
+        min_detection_confidence=0.5,
+        min_tracking_confidence=0.5
+    )
+
+Model Complexity:
+    0 = Lite (fastest, least accurate)
+    1 = Full (balanced)
+    2 = Heavy (slowest, most accurate) <- We use this
+
+--------------------------------------------------------------------------------
+METHOD: extract_landmarks(image)
+--------------------------------------------------------------------------------
+
+Input: RGB image as numpy array
+
+Output: Dictionary with 33 body landmarks
+    {
+        'landmarks': [
+            {'x': 0.5, 'y': 0.2, 'z': -0.1, 'visibility': 0.99},
+            ...  // 33 landmarks total
+        ],
+        'image_shape': (480, 640, 3)
+    }
+
+Returns None if no body detected.
+
+--------------------------------------------------------------------------------
+MEDIAPIPE POSE LANDMARKS (33 total)
+--------------------------------------------------------------------------------
+
+Index | Landmark          | Use in ReadyMe
+------|-------------------|-------------------------
+0     | nose              | Height calculation
+11    | left_shoulder     | Shoulder width
+12    | right_shoulder    | Shoulder width
+13    | left_elbow        | (Not used)
+14    | right_elbow       | (Not used)
+15    | left_wrist        | (Not used)
+16    | right_wrist       | (Not used)
+23    | left_hip          | Waist, hips
+24    | right_hip         | Waist, hips
+25    | left_knee         | (Not used)
+26    | right_knee        | (Not used)
+27    | left_ankle        | Height calculation
+28    | right_ankle       | Height calculation
+
+Coordinates are normalized [0, 1] relative to image dimensions.
+z provides depth estimation (not used in current implementation).
+visibility indicates how visible the landmark is.
+
+--------------------------------------------------------------------------------
+GLOBAL INSTANCE PATTERN:
+--------------------------------------------------------------------------------
+
+    _extractor = None
+
+    def get_extractor() -> BodyLandmarkExtractor:
+        global _extractor
+        if _extractor is None:
+            _extractor = BodyLandmarkExtractor()
+        return _extractor
+
+Purpose: MediaPipe models are expensive to load. Using a singleton prevents
+reloading the model on every request.
+
+================================================================================
+                 6.2 preprocessing.py - Image Preprocessing
+================================================================================
+
+FILE: app/services/preprocessing.py
+
+Prepares images for MediaPipe processing.
+
+--------------------------------------------------------------------------------
+FUNCTION: load_image(image_array)
+--------------------------------------------------------------------------------
+
+Validates and converts image to RGB format.
+
+    - If grayscale (2D): Convert to RGB
+    - If RGBA (4 channels): Remove alpha channel
+    - Otherwise: Return as-is
+
+--------------------------------------------------------------------------------
+FUNCTION: resize_image(image, target_size=(640, 480))
+--------------------------------------------------------------------------------
+
+Resizes image to optimal size for MediaPipe.
+
+Why 640x480?
+    - MediaPipe models work best at this resolution
+    - Too small: Landmarks become inaccurate
+    - Too large: Processing time increases with little benefit
+
+--------------------------------------------------------------------------------
+FUNCTION: normalize_image(image)
+--------------------------------------------------------------------------------
+
+Normalizes brightness and contrast using CLAHE.
+
+CLAHE (Contrast Limited Adaptive Histogram Equalization):
+    - Divides image into 8x8 tiles
+    - Applies histogram equalization to each tile
+    - Clip limit of 2.0 prevents over-amplification
+
+Process:
+    1. Convert RGB to LAB color space
+    2. Apply CLAHE to L (lightness) channel
+    3. Convert back to RGB
+
+Why LAB color space?
+    - Separates lightness from color information
+    - Allows brightness adjustment without color distortion
+
+--------------------------------------------------------------------------------
+FUNCTION: denoise_image(image)
+--------------------------------------------------------------------------------
+
+Removes noise using Non-Local Means algorithm.
+
+    cv2.fastNlMeansDenoisingColored(image, None, 10, 10, 7, 21)
+
+Parameters:
+    - h=10: Filter strength for luminance
+    - hColor=10: Filter strength for color
+    - templateWindowSize=7: Size of template patch
+    - searchWindowSize=21: Size of search window
+
+Why needed?
+    - Smartphone photos often have noise
+    - Noise interferes with landmark detection
+    - Non-local means preserves edges better than Gaussian blur
+
+--------------------------------------------------------------------------------
+FUNCTION: enhance_contrast(image)
+--------------------------------------------------------------------------------
+
+Enhances contrast using histogram equalization on Y channel.
+
+Process:
+    1. Convert RGB to YCrCb
+    2. Equalize Y (luminance) channel
+    3. Convert back to RGB
+
+--------------------------------------------------------------------------------
+FUNCTION: preprocess_image(image_array)
+--------------------------------------------------------------------------------
+
+Full preprocessing pipeline:
+
+    load_image() -> resize_image() -> normalize_image() -> denoise_image()
+
+Called from scan.py before landmark extraction.
+
+================================================================================
+                   6.3 measurement.py - Measurement Calculations
+================================================================================
+
+FILE: app/services/measurement.py
+
+Converts MediaPipe landmarks to actual body measurements in centimeters.
+
+--------------------------------------------------------------------------------
+HUMAN PROPORTION RATIOS:
+--------------------------------------------------------------------------------
+
+    AVERAGE_HUMAN_RATIOS = {
+        'height_to_shoulder_ratio': 4.5,   // Height ~4.5x shoulder width
+        'chest_to_shoulder_ratio': 1.1,    // Chest ~1.1x shoulder width
+        'waist_to_shoulder_ratio': 0.85,   // Waist ~0.85x shoulder width
+        'hips_to_shoulder_ratio': 1.05,    // Hips ~1.05x shoulder width
+    }
+
+These ratios are based on anthropometric studies and provide reasonable
+estimates when absolute scale is unknown.
+
+--------------------------------------------------------------------------------
+HELPER FUNCTIONS:
+--------------------------------------------------------------------------------
+
+euclidean_distance_3d(p1, p2) -> float
+    Calculates 3D distance using x, y, z coordinates
+
+euclidean_distance_2d(p1, p2) -> float
+    Calculates 2D distance (ignoring z depth)
+
+--------------------------------------------------------------------------------
+MEASUREMENT FUNCTIONS:
+--------------------------------------------------------------------------------
+
+calculate_height(landmarks, image_shape) -> float
+    Uses nose (0) and average of ankles (27, 28)
+    Conversion: height_pixels * 0.5 = cm (approximate)
+    Clamped to range [120, 220] cm
+
+    Limitation: Without a reference object, height is estimated.
+    Future improvement: Ask user height for calibration.
+
+calculate_shoulder_width(landmarks, image_shape) -> float
+    Uses left_shoulder (11) and right_shoulder (12)
+    Conversion: distance * image_width * 0.4
+    Clamped to range [25, 60] cm
+
+calculate_chest(landmarks, image_shape, shoulder_width) -> float
+    Estimated from shoulder width using ratio 1.1
+    Clamped to range [70, 140] cm
+
+    Note: MediaPipe doesn't provide depth, so chest is estimated.
+    Future improvement: Use user-provided chest measurement.
+
+calculate_waist(landmarks, image_shape, shoulder_width) -> float
+    Uses hip landmarks (23, 24) and shoulder ratio
+    Clamped to range [50, 130] cm
+
+calculate_hips(landmarks, image_shape, shoulder_width) -> float
+    Uses hip landmarks and ratio 1.05
+    Clamped to range [60, 150] cm
+
+--------------------------------------------------------------------------------
+MAIN FUNCTION: calculate_measurements()
+--------------------------------------------------------------------------------
+
+    def calculate_measurements(landmarks_data, image_shape) -> dict:
+        landmarks = landmarks_data['landmarks']
+
+        shoulder_width = calculate_shoulder_width(landmarks, image_shape)
+        height = calculate_height(landmarks, image_shape)
+        chest = calculate_chest(landmarks, image_shape, shoulder_width)
+        waist = calculate_waist(landmarks, image_shape, shoulder_width)
+        hips = calculate_hips(landmarks, image_shape, shoulder_width)
+
+        return {
+            'height': round(height, 1),
+            'chest': round(chest, 1),
+            'waist': round(waist, 1),
+            'hips': round(hips, 1),
+            'shoulder_width': round(shoulder_width, 1)
+        }
+
+Order matters: Shoulder width is calculated first as it's used for
+other measurements.
+
+================================================================================
+               6.4 chart_matcher.py - Size Chart Matching Algorithm
+================================================================================
+
+FILE: app/services/chart_matcher.py
+
+Matches body measurements against size charts to recommend sizes.
+
+--------------------------------------------------------------------------------
+STANDARD SIZE CHARTS:
+--------------------------------------------------------------------------------
+
+Built-in charts for 4 categories, 2 genders:
+
+    STANDARD_CHARTS = {
+        "shirts": {
+            "men": [
+                {"size": "XS", "height_min": 160, "height_max": 165,
+                           "chest_min": 86, "chest_max": 91,
+                           "waist_min": 71, "waist_max": 76},
+                ...
+            ],
+            "women": [...]
+        },
+        "pants": {...},
+        "dresses": {"women": [...]},
+        "jackets": {...}
+    }
+
+Measurements are in centimeters.
+
+--------------------------------------------------------------------------------
+MEASUREMENT WEIGHTS BY CATEGORY:
+--------------------------------------------------------------------------------
+
+Different garment types prioritize different measurements:
+
+    MEASUREMENT_WEIGHTS = {
+        "shirts":   {"height": 0.2, "chest": 0.4, "waist": 0.3, "shoulder": 0.1, "hips": 0.0},
+        "pants":    {"height": 0.15, "waist": 0.4, "hips": 0.35, "chest": 0.0, "shoulder": 0.1},
+        "dresses":  {"height": 0.15, "chest": 0.25, "waist": 0.3, "hips": 0.25, "shoulder": 0.05},
+        "jackets":  {"height": 0.15, "chest": 0.35, "shoulder": 0.25, "waist": 0.15, "hips": 0.1}
+    }
+
+Example interpretation:
+    - For shirts: chest is most important (40%), waist second (30%)
+    - For pants: waist and hips together account for 75%
+    - Jackets prioritize chest and shoulder for proper fit
+
+--------------------------------------------------------------------------------
+KEY ALGORITHM: calculate_weighted_distance()
+--------------------------------------------------------------------------------
+
+This is the core matching algorithm that determines how well a user's
+measurements match a size entry.
+
+Algorithm:
+    1. For each measurement (height, chest, waist, hips, shoulder):
+        a. Calculate ideal value = (min + max) / 2
+        b. Calculate range = max - min
+        c. Calculate distance = |user_value - ideal| / range
+        d. Weight by category importance
+    2. Sum weighted distances
+    3. Normalize by total weight
+
+Distance interpretation:
+    0.0 = Perfect match (exactly at center of range)
+    0.5 = At edge of acceptable range
+    1.0+ = Outside the size range
+
+--------------------------------------------------------------------------------
+CONFIDENCE SCORE CALCULATION:
+--------------------------------------------------------------------------------
+
+    calculate_confidence(distance, measurements_in_range, total_measurements)
+
+Formula:
+    base_confidence = 100 - (distance * 100)
+    coverage_bonus = (measurements_in_range / total) * 20
+    confidence = min(100, base_confidence + coverage_bonus)
+
+Interpretation:
+    90-100%: User measurement within exact size range
+    70-89%:  User measurement close to size boundary
+    50-69%:  Between two sizes (recommend both)
+    <50%:    Limited chart data or unusual proportions
+
+--------------------------------------------------------------------------------
+FIT TYPE DETERMINATION:
+--------------------------------------------------------------------------------
+
+    determine_fit_type(measurements, entry, distance) -> str
+
+Returns:
+    - "perfect": distance < 0.3 and most measurements in range
+    - "tight": Measurements exceed max bounds (tight on body)
+    - "loose": Measurements below min bounds (loose on body)
+    - "between_sizes": Close to two different sizes
+
+--------------------------------------------------------------------------------
+MAIN FUNCTION: predict_size()
+--------------------------------------------------------------------------------
+
+    def predict_size(
+        measurements: BodyMeasurements,
+        size_chart: Optional[SizeChart] = None,
+        use_standard_chart: bool = True,
+        category: str = "shirts",
+        gender: str = "men"
+    ) -> SizePredictionResponse:
+
+Process:
+    1. Get size chart (provided or standard)
+    2. Sort sizes by min values
+    3. Calculate weighted distance for each size
+    4. Find best match and alternative
+    5. Generate explanation
+    6. Check for body proportion warnings
+
+--------------------------------------------------------------------------------
+BODY PROPORTION ANALYSIS:
+--------------------------------------------------------------------------------
+
+    calculate_body_proportions(measurements) -> dict
+
+Calculates ratios:
+    - waist_to_height: Ratio > 0.6 is flagged as unusual
+    - chest_to_waist: Ratio > 1.5 is flagged
+    - hips_to_waist: For future use
+
+These warnings help users understand when standard sizes might not fit well.
+
+================================================================================
+                  6.5 fit_model.py - TensorFlow ML Model
+================================================================================
+
+FILE: app/services/fit_model.py
+
+Neural network for learning from user fit feedback.
+
+--------------------------------------------------------------------------------
+TENSORFLOW OPTIONAL HANDLING:
+--------------------------------------------------------------------------------
+
+    try:
+        import tensorflow as tf
+        TENSORFLOW_AVAILABLE = True
+    except Exception:
+        TENSORFLOW_AVAILABLE = False
+
+If TensorFlow is not installed:
+    - API still works
+    - ML predictions return defaults
+    - Feedback is not saved for training
+
+--------------------------------------------------------------------------------
+MODEL ARCHITECTURE:
+--------------------------------------------------------------------------------
+
+    Input: 6 features (5 measurements + 1 category encoding)
+    |
+    v
+    Dense(64, ReLU) -> BatchNorm -> Dropout(0.3)
+    |
+    v
+    Dense(32, ReLU) -> BatchNorm -> Dropout(0.2)
+    |
+    v
+    Dense(16, ReLU)
+    |
+    v
+    Dense(1, Sigmoid)  -> Output: 0-1 fit score
+
+Total parameters: ~4,000 (lightweight)
+
+--------------------------------------------------------------------------------
+INPUT ENCODING:
+--------------------------------------------------------------------------------
+
+Measurements normalized to [0, 1]:
+    normalize_measurements(measurements) -> np.ndarray
+
+    ranges = {
+        "height": (140, 220),
+        "chest": (60, 150),
+        "waist": (50, 140),
+        "hips": (60, 150),
+        "shoulder_width": (30, 70)
+    }
+
+    normalized = (value - min) / (max - min)
+
+Category encoding:
+    CATEGORY_ENCODING = {
+        "shirts": 0,
+        "pants": 1,
+        "dresses": 2,
+        "jackets": 3
+    }
+
+    encoded = category_index / num_categories  # Normalized to [0, 0.75]
+
+--------------------------------------------------------------------------------
+FIT SCORE ENCODING:
+--------------------------------------------------------------------------------
+
+    FIT_ENCODING = {
+        "too_tight": 0.0,
+        "tight": 0.25,
+        "perfect": 0.5,
+        "loose": 0.75,
+        "too_loose": 1.0
+    }
+
+The model learns to predict these values based on user feedback.
+
+--------------------------------------------------------------------------------
+MODEL STORAGE:
+--------------------------------------------------------------------------------
+
+    MODEL_DIR = app/models/weights/
+    MODEL_PATH = fit_model.keras
+    TRAINING_DATA_PATH = training_data.json
+
+Training data accumulates as JSON file with entries:
+    {
+        "timestamp": "2024-01-15T10:30:00",
+        "measurements": {"height": 175, ...},
+        "category": "shirts",
+        "size": "M",
+        "fit_rating": "perfect",
+        "fit_score": 0.5
+    }
+
+--------------------------------------------------------------------------------
+KEY FUNCTIONS:
+--------------------------------------------------------------------------------
+
+add_feedback(measurements, category, size, fit_rating) -> bool
+    Appends feedback to training_data.json
+
+train_model(epochs=50, batch_size=16) -> dict
+    Trains model on accumulated feedback
+    Requires at least 10 samples
+    Returns training metrics
+
+predict_fit(measurements, category, size) -> dict
+    Returns:
+        {
+            "success": true,
+            "fit_score": 0.52,
+            "interpretation": "perfect",
+            "confidence": "high",
+            "size": "M",
+            "category": "shirts"
+        }
+
+get_training_stats() -> dict
+    Returns count of samples by category and fit rating
+
+--------------------------------------------------------------------------------
+DEFAULT MODEL INITIALIZATION:
+--------------------------------------------------------------------------------
+
+    initialize_default_model()
+
+Creates a basic model trained on synthetic data if no model exists.
+This ensures reasonable predictions even before collecting user feedback.
+
+Synthetic data generation:
+    - Iterates through realistic measurement combinations
+    - Assigns fit scores based on chest-size relationships
+    - Trains for 20 epochs
+
+================================================================================
+                        7. DATA MODELS (schemas.py)
+================================================================================
+
+FILE: app/models/schemas.py
+
+Pydantic models for request/response validation.
+
+--------------------------------------------------------------------------------
+BODY MEASUREMENTS:
+--------------------------------------------------------------------------------
+
+    class BodyMeasurements(BaseModel):
+        height: float          # in cm, range: 120-220
+        chest: float           # in cm, range: 70-140
+        waist: float           # in cm, range: 50-130
+        hips: float            # in cm, range: 60-150
+        shoulder_width: float  # in cm, range: 25-60
+
+All measurements required, no optional fields.
+
+--------------------------------------------------------------------------------
+SCAN MODELS:
+--------------------------------------------------------------------------------
+
+    class ScanMeasureRequest(BaseModel):
+        image_data: str        # Base64 encoded image
+        user_id: Optional[str] # For saving
+
+    class ScanMeasureResponse(BaseModel):
+        success: bool
+        measurements: BodyMeasurements
+        message: Optional[str]
+
+--------------------------------------------------------------------------------
+PROFILE MODELS:
+--------------------------------------------------------------------------------
+
+    class ProfileSaveRequest(BaseModel):
+        user_id: str
+        measurements: BodyMeasurements
+        name: Optional[str]
+
+    class ProfileResponse(BaseModel):
+        id: str
+        user_id: str
+        measurements: BodyMeasurements
+        name: Optional[str]
+        created_at: str
+        updated_at: str
+
+--------------------------------------------------------------------------------
+SIZE CHART MODELS:
+--------------------------------------------------------------------------------
+
+    class SizeChartEntry(BaseModel):
+        """Single row in a size chart"""
+        size: str              # "S", "M", "L", "32", etc.
+        height_min: Optional[float]
+        height_max: Optional[float]
+        chest_min: Optional[float]
+        chest_max: Optional[float]
+        waist_min: Optional[float]
+        waist_max: Optional[float]
+        hips_min: Optional[float]
+        hips_max: Optional[float]
+        shoulder_min: Optional[float]
+        shoulder_max: Optional[float]
+
+    class SizeChart(BaseModel):
+        """Complete size chart"""
+        brand: str
+        category: str          # "shirts", "pants", etc.
+        sizes: list[SizeChartEntry]
+        gender: Optional[str]  # "men", "women", "unisex"
+
+--------------------------------------------------------------------------------
+SIZE PREDICTION MODELS:
+--------------------------------------------------------------------------------
+
+    class SizePredictionRequest(BaseModel):
+        measurements: BodyMeasurements
+        size_chart: Optional[SizeChart]
+        use_standard_chart: bool = True
+
+    class SizeRecommendation(BaseModel):
+        size: str
+        confidence: float      # 0-100
+        fit_type: str          # "perfect", "tight", "loose", "between_sizes"
+        explanation: str
+        alternative_size: Optional[str]
+
+    class SizePredictionResponse(BaseModel):
+        success: bool
+        recommendations: list[SizeRecommendation]
+        measurements_used: list[str]
+        warnings: Optional[list[str]]
+
+--------------------------------------------------------------------------------
+SIZE VALIDATION MODELS:
+--------------------------------------------------------------------------------
+
+    class SizeValidationRequest(BaseModel):
+        measurements: BodyMeasurements
+        current_size: str
+        size_chart: SizeChart
+
+    class SizeValidationResponse(BaseModel):
+        success: bool
+        is_match: bool
+        recommended_size: Optional[str]
+        fit_score: float       # 0-100
+        explanation: str
+
+--------------------------------------------------------------------------------
+PRODUCT EXTRACTION MODELS:
+--------------------------------------------------------------------------------
+
+    class ProductExtractRequest(BaseModel):
+        url: str
+        category: Optional[str]
+
+    class ProductInfo(BaseModel):
+        name: str
+        brand: Optional[str]
+        category: str
+        gender: Optional[str]
+        url: str
+
+    class ProductExtractResponse(BaseModel):
+        success: bool
+        product: Optional[ProductInfo]
+        size_chart: Optional[SizeChart]
+        message: Optional[str]
+        warnings: Optional[list[str]]
+
+================================================================================
+                      8. DATABASE LAYER (supabase.py)
+================================================================================
+
+FILE: app/db/supabase.py
+
+Supabase client initialization.
+
+--------------------------------------------------------------------------------
+CODE:
+--------------------------------------------------------------------------------
+
+    import os
+    from supabase import create_client, Client
+    from dotenv import load_dotenv
+
+    load_dotenv()
+
+    SUPABASE_URL = os.getenv("SUPABASE_URL")
+    SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+
+    supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+--------------------------------------------------------------------------------
+ENVIRONMENT VARIABLES:
+--------------------------------------------------------------------------------
+
+    SUPABASE_URL:    https://your-project.supabase.co
+    SUPABASE_KEY:    Your anon/public key (or service role key)
+
+    Note: SUPABASE_JWT_SECRET is used for token validation, not client init.
+
+--------------------------------------------------------------------------------
+DATABASE TABLES:
+--------------------------------------------------------------------------------
+
+users (Supabase Auth)
+    - id: uuid (primary key)
+    - email: string
+    - created_at: timestamp
+    - (managed by Supabase Auth)
+
+body_profiles
+    - id: uuid (primary key)
+    - user_id: uuid (foreign key -> users.id)
+    - height: float
+    - chest: float
+    - waist: float
+    - hips: float
+    - shoulder_width: float
+    - name: string (optional)
+    - created_at: timestamp
+    - updated_at: timestamp
+
+scan_history (future use)
+    - id: uuid
+    - user_id: uuid
+    - image_url: string (optional)
+    - measurements: jsonb
+    - created_at: timestamp
+
+--------------------------------------------------------------------------------
+USAGE IN ROUTERS:
+--------------------------------------------------------------------------------
+
+    from app.db.supabase import supabase
+
+    # Query
+    response = supabase.table("body_profiles").select("*").execute()
+
+    # Insert
+    response = supabase.table("body_profiles").insert(data).execute()
+
+    # Update
+    response = supabase.table("body_profiles").update(data).eq("id", id).execute()
+
+    # Check for errors
+    if response.error:
+        # Handle error
+
+    # Get data
+    data = response.data
+
+--------------------------------------------------------------------------------
+IMPORTANT RULES:
+--------------------------------------------------------------------------------
+
+1. Never import supabase library directly in routers
+2. Always use app/db/supabase.py as single source
+3. Handle response.error for all operations
+4. Use .execute() to actually run the query
+
+================================================================================
+                   9. AUTHENTICATION (jwt_middleware.py)
+================================================================================
+
+FILE: app/auth/jwt_middleware.py
+
+JWT token validation for Supabase authentication.
+
+--------------------------------------------------------------------------------
+CONFIGURATION:
+--------------------------------------------------------------------------------
+
+    JWT_SECRET = os.getenv("SUPABASE_JWT_SECRET") or os.getenv("SUPABASE_KEY")
+    ALGORITHM = "HS256"
+
+Note: In production, use SUPABASE_JWT_SECRET for proper validation.
+      Using SUPABASE_KEY as fallback for development only.
+
+--------------------------------------------------------------------------------
+CLASS: TokenData
+--------------------------------------------------------------------------------
+
+    class TokenData:
+        user_id: str
+        email: Optional[str]
+
+Simple dataclass to hold extracted token information.
+
+--------------------------------------------------------------------------------
+FUNCTION: decode_supabase_token(token)
+--------------------------------------------------------------------------------
+
+Process:
+    1. Check JWT_SECRET is configured
+    2. Decode token using jose.jwt.decode()
+    3. Extract 'sub' claim (user ID)
+    4. Extract 'email' claim (optional)
+
+Supabase JWT Claims:
+    - sub: User UUID
+    - email: User email
+    - role: "authenticated" or "anon"
+    - aud: "authenticated"
+    - iat: Issued at timestamp
+    - exp: Expiration timestamp
+
+Errors:
+    - JWTError: Token invalid, expired, or malformed
+    - Missing sub: Invalid token format
+
+--------------------------------------------------------------------------------
+DEPENDENCY: get_current_user
+--------------------------------------------------------------------------------
+
+    async def get_current_user(
+        credentials: HTTPAuthorizationCredentials = Depends(security)
+    ) -> TokenData:
+
+Usage in router:
+    from app.auth.jwt_middleware import get_current_user, TokenData
+
+    @router.get("/protected")
+    async def protected_route(user: TokenData = Depends(get_current_user)):
+        return {"user_id": user.user_id, "email": user.email}
+
+The dependency:
+    1. Extracts Authorization header
+    2. Validates Bearer token format
+    3. Decodes and validates token
+    4. Returns TokenData or raises 401
+
+--------------------------------------------------------------------------------
+DEPENDENCY: get_current_user_optional
+--------------------------------------------------------------------------------
+
+Same as get_current_user but returns None instead of raising 401.
+Useful for endpoints that work with or without authentication.
+
+================================================================================
+                     10. DEPENDENCIES (requirements.txt)
+================================================================================
+
+FILE: requirements.txt
+
+--------------------------------------------------------------------------------
+FastAPI Core:
+--------------------------------------------------------------------------------
+
+fastapi==0.115.0
+    Modern async web framework with automatic OpenAPI docs
+    Why chosen: Fast, async, great developer experience
+
+uvicorn[standard]==0.32.0
+    ASGI server for running FastAPI
+    [standard] includes uvloop and httptools for performance
+
+pydantic==2.9.0
+    Data validation using Python type hints
+    Why chosen: Native FastAPI integration, fast validation
+
+--------------------------------------------------------------------------------
+Image Processing:
+--------------------------------------------------------------------------------
+
+opencv-python-headless==4.10.0.84
+    Computer vision library
+    -headless: No GUI dependencies (for servers)
+
+numpy==1.26.4
+    Numerical computing
+    Required by OpenCV, MediaPipe, TensorFlow
+
+pillow==10.4.0
+    Image loading and format handling
+    Used to read various image formats
+
+--------------------------------------------------------------------------------
+MediaPipe:
+--------------------------------------------------------------------------------
+
+mediapipe==0.10.32
+    Google's ML solution for body pose detection
+    Provides 33 body landmarks
+
+--------------------------------------------------------------------------------
+Web Scraping:
+--------------------------------------------------------------------------------
+
+beautifulsoup4==4.12.3
+    HTML parsing for size chart extraction
+
+lxml==5.3.0
+    Fast XML/HTML parser backend for BeautifulSoup
+
+--------------------------------------------------------------------------------
+HTTP & Config:
+--------------------------------------------------------------------------------
+
+python-dotenv==1.0.1
+    Load environment variables from .env file
+
+httpx==0.27.2
+    Modern async HTTP client
+    Alternative to requests for async operations
+
+requests==2.32.3
+    HTTP client for web scraping
+    Used in product.py
+
+python-multipart==0.0.9
+    Handle multipart/form-data uploads
+    Required for image file uploads
+
+--------------------------------------------------------------------------------
+Authentication:
+--------------------------------------------------------------------------------
+
+python-jose[cryptography]==3.3.0
+    JWT token handling
+    [cryptography]: Includes crypto algorithms for JWT
+
+--------------------------------------------------------------------------------
+Optional (not in requirements.txt):
+--------------------------------------------------------------------------------
+
+tensorflow>=2.10.0
+    Neural network for fit prediction
+    Optional: API works without it
+
+supabase>=2.0.0
+    Supabase Python client
+    Note: Must be installed separately
+
+================================================================================
+                          11. DATA FLOW DIAGRAMS
+================================================================================
+
+--------------------------------------------------------------------------------
+A. Body Measurement Flow:
+--------------------------------------------------------------------------------
+
+    User Photo
+         |
+         v
+    [Extension captures image]
+         |
+         v
+    POST /scan/measure-base64
+         |
+         v
+    +------------------------+
+    | preprocessing.py       |
+    | - resize to 640x480    |
+    | - normalize brightness |
+    | - denoise              |
+    +------------------------+
+         |
+         v
+    +------------------------+
+    | mediapipe_extractor.py |
+    | - detect body pose     |
+    | - extract 33 landmarks |
+    +------------------------+
+         |
+         v
+    +------------------------+
+    | measurement.py         |
+    | - calculate height     |
+    | - calculate chest      |
+    | - calculate waist      |
+    | - calculate hips       |
+    | - calculate shoulder   |
+    +------------------------+
+         |
+         v
+    Response: BodyMeasurements
+         |
+         v
+    [Extension displays measurements]
+
+--------------------------------------------------------------------------------
+B. Size Prediction Flow:
+--------------------------------------------------------------------------------
+
+    User Measurements
+         |
+         v
+    POST /size/predict
+         |
+         v
+    +------------------------+
+    | chart_matcher.py       |
+    | - get size chart       |
+    | - calculate distances  |
+    | - rank by fit          |
+    | - generate explanation |
+    +------------------------+
+         |
+         v
+    Response: SizeRecommendation
+         |
+         v
+    [Extension shows recommended size]
+
+--------------------------------------------------------------------------------
+C. Product Size Chart Extraction Flow:
+--------------------------------------------------------------------------------
+
+    Product URL
+         |
+         v
+    POST /product/extract
+         |
+         v
+    +------------------------+
+    | product.py             |
+    | - detect platform      |
+    | - fetch HTML           |
+    | - parse size table     |
+    | - convert to SizeChart |
+    +------------------------+
+         |
+         v
+    Response: ProductExtractResponse
+         |
+         v
+    [Extension shows size chart]
+
+--------------------------------------------------------------------------------
+D. Profile Save Flow:
+--------------------------------------------------------------------------------
+
+    User Measurements
+         |
+         v
+    POST /profile/save (with JWT)
+         |
+         v
+    +------------------------+
+    | jwt_middleware.py      |
+    | - validate token       |
+    | - extract user_id      |
+    +------------------------+
+         |
+         v
+    +------------------------+
+    | profile.py             |
+    | - prepare data         |
+    | - insert to database   |
+    +------------------------+
+         |
+         v
+    +------------------------+
+    | supabase.py            |
+    | - execute insert       |
+    +------------------------+
+         |
+         v
+    Response: ProfileResponse
+
+================================================================================
+                        12. API ENDPOINTS SUMMARY
+================================================================================
+
+--------------------------------------------------------------------------------
+SCAN ENDPOINTS (/scan)
+--------------------------------------------------------------------------------
+
+Method | Endpoint           | Auth | Description
+-------|-------------------|------|----------------------------------------
+POST   | /scan/measure     | No   | Upload image file, get measurements
+POST   | /scan/measure-base64 | No | Send base64 image, get measurements
+
+--------------------------------------------------------------------------------
+SIZE ENDPOINTS (/size)
+--------------------------------------------------------------------------------
+
+Method | Endpoint           | Auth | Description
+-------|-------------------|------|----------------------------------------
+POST   | /size/predict     | No   | Get size recommendation
+POST   | /size/validate    | No   | Validate current size against measurements
+GET    | /size/standard-charts | No | List available charts
+GET    | /size/chart/{cat} | No   | Get specific size chart
+POST   | /size/feedback    | No   | Submit fit feedback
+POST   | /size/model/train | No   | Train ML model
+GET    | /size/model/stats | No   | Get training statistics
+POST   | /size/predict-fit | No   | ML-based fit prediction
+
+--------------------------------------------------------------------------------
+PRODUCT ENDPOINTS (/product)
+--------------------------------------------------------------------------------
+
+Method | Endpoint              | Auth | Description
+-------|----------------------|------|----------------------------------------
+POST   | /product/extract     | No   | Extract size chart from URL
+GET    | /product/supported-platforms | No | List supported e-commerce sites
+
+--------------------------------------------------------------------------------
+PROFILE ENDPOINTS (/profile)
+--------------------------------------------------------------------------------
+
+Method | Endpoint       | Auth | Description
+-------|---------------|------|----------------------------------------
+POST   | /profile/save  | No*  | Save body measurements
+GET    | /profile/get   | Yes  | Get user's profile
+PUT    | /profile/update| Yes  | Update user's profile
+
+*Note: POST /profile/save accepts user_id in body, not JWT
+
+--------------------------------------------------------------------------------
+ROOT ENDPOINTS
+--------------------------------------------------------------------------------
+
+Method | Endpoint   | Auth | Description
+-------|-----------|------|----------------------------------------
+GET    | /          | No   | API root, status check
+GET    | /health    | No   | Health check for monitoring
+GET    | /test-db   | No   | Test database connection
+
+================================================================================
+                       13. ENVIRONMENT VARIABLES
+================================================================================
+
+Required in .env file:
+
+    # Supabase Configuration
+    SUPABASE_URL=https://your-project-id.supabase.co
+    SUPABASE_KEY=your-anon-key-or-service-role-key
+
+    # JWT Authentication
+    SUPABASE_JWT_SECRET=your-jwt-secret
+
+How to get these values:
+    1. Create project at supabase.com
+    2. Go to Project Settings > API
+    3. Copy URL to SUPABASE_URL
+    4. Copy anon/public key to SUPABASE_KEY
+    5. Go to Project Settings > JWT
+    6. Copy JWT Secret to SUPABASE_JWT_SECRET
+
+================================================================================
+                              END OF DOCUMENTATION
+================================================================================
