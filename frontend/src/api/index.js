@@ -4,7 +4,7 @@
  */
 
 // Configuration
-export { API_BASE_URL, API_TIMEOUT, ENDPOINTS, API_CONFIG } from './config'
+export { API_BASE_URL, API_TIMEOUT, ENDPOINTS, API_CONFIG } from './config';
 
 // Client
 export {
@@ -14,23 +14,23 @@ export {
   apiPost,
   apiPostFormData,
   apiPostText,
-} from './client'
+} from './client';
 
 // Scan API
 export {
+  scanImage,
   scanMeasureImage,
   scanMeasureBase64,
-  scanImage,
   fileToBase64,
   isValidImageFile,
   getSupportedImageTypes,
-} from './scan'
+} from './scan';
 
 // Size API
 export {
   predictSize,
-  getStandardCharts,
   getSizeChart,
+  getStandardCharts,
   validateSize,
   submitFitFeedback,
-} from './size'
+} from './size';

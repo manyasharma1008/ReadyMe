@@ -89,12 +89,10 @@ export async function submitFitFeedback(measurements, category, size, fitRating)
     throw new Error(`Invalid fit rating. Must be one of: ${validRatings.join(', ')}`)
   }
 
-  return apiPost('/size/feedback', null, {
-    params: {
-      measurements,
-      category,
-      size,
-      fit_rating: fitRating,
-    },
+  return apiPost('/size/feedback', {
+    measurements,
+    category,
+    size,
+    fit_rating: fitRating,
   })
 }

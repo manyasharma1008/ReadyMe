@@ -20,6 +20,7 @@ export const ENDPOINTS = {
   SIZE_VALIDATE: '/size/validate',
   SIZE_STANDARD_CHARTS: '/size/standard-charts',
   SIZE_CHART: '/size/chart',
+  SIZE_FEEDBACK: '/size/feedback',
 
   // Profile endpoints
   PROFILE_SAVE: '/profile/save',
