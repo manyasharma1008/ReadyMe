@@ -1,6 +1,6 @@
 import base64
 import io
-from fastapi import APIRouter, UploadFile, File, HTTPException
+from fastapi import APIRouter, UploadFile, File, HTTPException, Body
 from PIL import Image
 import numpy as np
 
@@ -56,11 +56,16 @@ async def measure_body(
 
 
 @router.post("/measure-base64", response_model=ScanMeasureResponse)
-async def measure_body_base64(image_data: str):
+async def measure_body_base64(payload: dict):
     """
     Analyze a body image from base64 string and extract measurements.
+    Expects JSON body: {"image_data": "base64_string"}
     """
     try:
+        image_data = payload.get("image_data")
+        if not image_data:
+            raise HTTPException(status_code=422, detail="Missing 'image_data' in request body")
+
         # Decode base64 image
         image_bytes = base64.b64decode(image_data)
         image_pil = Image.open(io.BytesIO(image_bytes))
