@@ -1,19 +1,9 @@
-console.log("POPUP JS LOADED")
-
 document.addEventListener("DOMContentLoaded", () => {
-  console.log("DOM READY")
-
   const btn = document.getElementById("scan")
-  console.log("BTN:", btn)
 
-  if (!btn) {
-    console.error("BUTTON NOT FOUND")
-    return
-  }
+  if (!btn) return
 
   btn.addEventListener("click", () => {
-
-    console.log("BUTTON CLICKED")
 
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
 
@@ -27,17 +17,12 @@ document.addEventListener("DOMContentLoaded", () => {
           { action: "GET_PRODUCT" },
           (product) => {
 
-            if (chrome.runtime.lastError) {
-              console.error("ERROR:", chrome.runtime.lastError.message)
-              return
-            }
-
-            console.log("PRODUCT:", product)
+            if (chrome.runtime.lastError) return
 
             const encoded = encodeURIComponent(JSON.stringify(product))
 
             chrome.tabs.create({
-              url: `http://localhost:5173/?data=${encoded}`
+              url: `https://ready-me-liart.vercel.app/?data=${encoded}`
             })
 
           }

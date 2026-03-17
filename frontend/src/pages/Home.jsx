@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 
 import Navbar from '../components/Navbar'
@@ -14,6 +14,29 @@ export default function Home() {
   const handleTryOn = () => {
     navigate("/camera")
   }
+
+  // ✅ ADD THIS BLOCK
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const data = params.get("data")
+
+    if (data) {
+      try {
+        const product = JSON.parse(decodeURIComponent(data))
+        console.log("PRODUCT FROM EXTENSION:", product)
+
+        // optional: store for later use
+        localStorage.setItem("productData", JSON.stringify(product))
+
+        // redirect to preview page
+        navigate("/preview")
+
+      } catch (err) {
+        console.error("Invalid product data")
+      }
+    }
+  }, [])
+  // ✅ END
 
   return (
     <div className="min-h-screen bg-[#e7e3dd]">

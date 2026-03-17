@@ -1,0 +1,101 @@
+body {
+  margin: 0;
+  padding: 0;
+  width: 280px;
+  height: 360px;
+  background: #F5F1EB;
+  font-family: 'DM Sans', sans-serif;
+  color: #2C2B28;
+}
+
+/* Layout */
+.container {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 18px;
+}
+
+/* Logo */
+.logo {
+  font-size: 20px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}
+
+/* Subtitle */
+.subtitle {
+  font-size: 10px;
+  letter-spacing: 0.25em;
+  text-transform: uppercase;
+  opacity: 0.5;
+  margin-top: -6px;
+}
+
+/* Card */
+.card {
+  background: #ffffff;
+  border: 1px solid rgba(44,43,40,0.1);
+  border-radius: 8px;
+  padding: 20px;
+  text-align: center;
+
+  box-shadow: 0 10px 30px rgba(44,43,40,0.08);
+}
+
+/* Label */
+.label {
+  font-size: 10px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  margin-bottom: 16px;
+  opacity: 0.6;
+}
+
+/* CTA Button (same feel as website) */
+.cta-btn {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid #2C2B28;
+  padding: 10px 16px;
+  background: transparent;
+  cursor: pointer;
+
+  font-size: 10px;
+  letter-spacing: 0.25em;
+  text-transform: uppercase;
+  color: #2C2B28;
+
+  transition: color 0.3s ease;
+}
+
+.cta-btn::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: #2C2B28;
+  transform: translateX(-101%);
+  transition: transform 0.35s ease;
+}
+
+.cta-btn:hover::before {
+  transform: translateX(0);
+}
+
+.cta-btn:hover {
+  color: #F5F1EB;
+}
+
+.cta-btn span {
+  position: relative;
+  z-index: 1;
+}
+
+/* Footer */
+.footer {
+  font-size: 10px;
+  text-align: center;
+  opacity: 0.3;
+  font-style: italic;
+}
