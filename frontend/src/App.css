@@ -1,1 +1,43 @@
-/* App styles handled via Tailwind */
+.preview-wrapper{
+display:flex;
+height:100vh;
+background:#e7e3dd;
+}
+
+.preview-left{
+width:220px;
+padding:25px;
+display:flex;
+flex-direction:column;
+gap:10px;
+}
+
+.preview-center{
+flex:1;
+height:100%;
+}
+
+.preview-right{
+width:220px;
+padding:25px;
+}
+
+.preview-center canvas{
+height:100% !important;
+width:100% !important;
+}
+
+.outfit-grid{
+display:grid;
+grid-template-columns:1fr 1fr;
+gap:10px;
+margin-top:10px;
+}
+
+.outfit-card{
+padding:10px;
+background:white;
+border-radius:6px;
+border:1px solid #ddd;
+cursor:pointer;
+}
