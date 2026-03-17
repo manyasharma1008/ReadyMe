@@ -26,13 +26,14 @@ function BodyScan() {
   ]
 
   useEffect(() => {
-
     async function startCamera() {
-
       try {
-
         const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: "user", width: 640, height: 480 }
+          video: {
+            facingMode: "user",
+            width: { ideal: 1280 },
+            height: { ideal: 720 }
+          }
         })
 
         if (videoRef.current) {
@@ -42,16 +43,12 @@ function BodyScan() {
         streamRef.current = stream
 
       } catch (error) {
-
         alert("Camera access denied")
-
       }
-
     }
 
     startCamera()
 
-    
     return () => {
       stopCamera()
     }
@@ -59,19 +56,12 @@ function BodyScan() {
   }, [])
 
   const stopCamera = () => {
-
     if (streamRef.current) {
-
       streamRef.current.getTracks().forEach(track => track.stop())
       streamRef.current = null
-
     }
-
   }
 
-  /**
-   * Capture current frame from video
-   */
   const captureFrame = useCallback(() => {
     if (!videoRef.current || !canvasRef.current) return null
 
@@ -84,117 +74,81 @@ function BodyScan() {
 
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
 
-    // Convert to base64 (without data URL prefix)
-    const dataUrl = canvas.toDataURL('image/jpeg', 0.8)
-    return dataUrl
+    return canvas.toDataURL('image/jpeg', 0.8)
   }, [])
 
-  /**
-   * Handle capture button click
-   */
   const handleCapture = async () => {
     clearError()
-    console.log("FINAL STEP - calling scan");
-    // Capture current frame
-    const imageData = captureFrame()
-    if (!imageData) {
-      return
-    }
 
-    // Store captured image
+    const imageData = captureFrame()
+    if (!imageData) return
+
     const newImages = [...capturedImages, imageData]
     setCapturedImages(newImages)
 
     if (step < 4) {
-      // Move to next step
       setStep(step + 1)
     } else {
-      // Final capture - process images
       stopCamera()
 
-      // Use the front-facing image for body measurement
-      // In a full implementation, you could combine all 4 views
       const frontImage = newImages[0] || imageData
 
       try {
         const measurements = await scan(frontImage)
 
         if (measurements) {
-          // Store measurements in global context
           setMeasurements(measurements)
-          // Navigate to results page
           navigate("/size-result")
         }
       } catch (err) {
         console.error("Scan failed:", err)
-        // Error is already handled by the hook
       }
     }
   }
 
-  /**
-   * Skip scanning and enter measurements manually
-   */
   const handleSkipToManual = () => {
     stopCamera()
     navigate("/size-result")
   }
 
   return (
+    <div className="min-h-screen bg-[#e7e3dd] flex flex-col items-center justify-center text-center px-4">
 
-    <div
-      style={{
-        textAlign: "center",
-        padding: "40px",
-        position: "relative"
-      }}
-    >
+      {/* Title */}
+      <h1 className="text-3xl font-light text-charcoal-900">
+        Body Scan
+      </h1>
 
-      <h2 className="text-2xl font-semibold mb-2">Body Scan</h2>
+      {/* Subtitle */}
+      <p className="mt-2 text-sm text-charcoal-700/70">
+        {instructions[step - 1]}
+      </p>
 
-      <p className="text-gray-600 mb-4">{instructions[step - 1]}</p>
+      {/* Hidden canvas */}
+      <canvas ref={canvasRef} className="hidden" />
 
-      {/* Hidden canvas for frame capture */}
-      <canvas ref={canvasRef} style={{ display: 'none' }} />
+      {/* Camera */}
+      <div className="mt-8 flex justify-center">
+        <div className="w-[520px] h-[300px] rounded-xl overflow-hidden shadow-md bg-black relative">
 
-      <div style={{ position: 'relative', display: 'inline-block' }}>
-        <video
-          ref={videoRef}
-          autoPlay
-          playsInline
-          width="420"
-          style={{
-            borderRadius: "10px",
-            marginTop: "20px",
-            transform: "scaleX(-1)" // Mirror for selfie view
-          }}
-        />
+          <video
+            ref={videoRef}
+            autoPlay
+            playsInline
+            className="w-full h-full object-cover scale-x-[-1]"
+          />
 
-        {/* Loading overlay */}
-        {loading && (
-          <div
-            style={{
-              position: 'absolute',
-              inset: 0,
-              background: 'rgba(0,0,0,0.5)',
-              borderRadius: '10px',
-              marginTop: '20px',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              flexDirection: 'column',
-              color: 'white'
-            }}
-          >
-            <LoadingSpinner size="lg" color="white" />
-            <p className="mt-4">Analyzing your body...</p>
-          </div>
-        )}
+          {/* Loading overlay */}
+          {loading && (
+            <div className="absolute inset-0 bg-black/50 flex flex-col items-center justify-center text-white">
+              <LoadingSpinner size="lg" color="white" />
+              <p className="mt-4">Analyzing your body...</p>
+            </div>
+          )}
+        </div>
       </div>
 
-      <br />
-
-      {/* Error message */}
+      {/* Error */}
       {error && (
         <div className="max-w-md mx-auto mt-4">
           <ErrorMessage
@@ -205,57 +159,50 @@ function BodyScan() {
         </div>
       )}
 
-      {/* Capture button */}
+      {/* Capture Button */}
       <button
         onClick={handleCapture}
         disabled={loading}
-        style={{
-          marginTop: "20px",
-          padding: "10px 20px",
-          cursor: loading ? "not-allowed" : "pointer",
-          opacity: loading ? 0.5 : 1
-        }}
-        className="bg-clay text-white rounded-lg hover:bg-opacity-90 transition-colors"
+        className={`mt-6 text-sm relative group transition-all duration-300 ${
+          loading
+            ? "text-gray-400 cursor-not-allowed"
+            : "text-charcoal-900"
+        }`}
       >
-        {loading ? "Processing..." : "Capture"}
+        <span className="relative z-10">
+          {loading ? "Processing..." : "Capture"}
+        </span>
+
+        <span className="absolute left-0 bottom-0 w-0 h-[1px] bg-charcoal-900 transition-all duration-300 group-hover:w-full"></span>
       </button>
 
-      {/* Skip to manual entry */}
-      <button
+      {/* Manual Entry */}
+      <p
         onClick={handleSkipToManual}
-        disabled={loading}
-        style={{
-          marginTop: "10px",
-          padding: "10px 20px",
-          cursor: loading ? "not-allowed" : "pointer",
-          display: "block",
-          margin: "10px auto"
-        }}
-        className="text-gray-600 underline hover:text-gray-800"
+        className="mt-4 text-sm underline cursor-pointer text-charcoal-800 hover:opacity-70"
       >
         Enter measurements manually
-      </button>
+      </p>
 
-      <p style={{ marginTop: "10px" }}>
+      {/* Step */}
+      <p className="mt-3 text-sm text-charcoal-700/70">
         Step {step} of 4
       </p>
 
-      {/* Progress indicators */}
-      <div className="flex justify-center gap-2 mt-4">
+      {/* Dots */}
+      <div className="flex gap-2 mt-2">
         {[1, 2, 3, 4].map((s) => (
           <div
             key={s}
             className={`w-2 h-2 rounded-full ${
-              s <= step ? 'bg-clay' : 'bg-gray-300'
+              s === step ? "bg-charcoal-900" : "bg-gray-300"
             }`}
           />
         ))}
       </div>
 
     </div>
-
   )
-
 }
 
 export default BodyScan

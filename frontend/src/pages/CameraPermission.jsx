@@ -4,25 +4,12 @@ export default function CameraPermission() {
 
   const navigate = useNavigate()
 
-  const handleAllowCamera = async () => {
-    try {
-      await navigator.mediaDevices.getUserMedia({ video: true })
-
-      // ✅ mark scan complete
-      localStorage.setItem("bodyScanDone", "true")
-
-      // redirect (optional)
-      navigate("/preview")
-
-    } catch (err) {
-      console.error("Camera access denied")
-    }
+  const handleAllowCamera = () => {
+    navigate("/scan")
   }
 
   const handleManualEntry = () => {
-    // also mark as done if manual
-    localStorage.setItem("bodyScanDone", "true")
-    navigate("/preview")
+    navigate("/size-result")
   }
 
   return (
@@ -39,25 +26,23 @@ export default function CameraPermission() {
         </p>
 
         <div className="w-full h-px bg-charcoal-700/10 my-6" />
-
         <div className="flex flex-col gap-3 w-full">
 
-          <button
-            onClick={handleAllowCamera}
-            className="cta-btn border border-charcoal-700 py-3 text-xs uppercase"
-          >
-            <span>ALLOW CAMERA</span>
-          </button>
+  <button
+    onClick={handleAllowCamera}
+    className="cta-btn border border-charcoal-700 px-8 py-3 font-mono text-xs tracking-[0.2em] uppercase w-full"
+  >
+    <span>ALLOW CAMERA</span>
+  </button>
 
-          <button
-            onClick={handleManualEntry}
-            className="cta-btn border border-charcoal-700 py-3 text-xs uppercase text-charcoal-700"
-          >
-            <span>ENTER SIZES MANUALLY</span>
-          </button>
+  <button
+    onClick={handleManualEntry}
+    className="cta-btn border border-charcoal-700 px-8 py-3 font-mono text-xs tracking-[0.2em] uppercase w-full"
+  >
+    <span>ENTER SIZES MANUALLY</span>
+  </button>
 
-        </div>
-
+</div>
       </div>
     </div>
   )

@@ -35,7 +35,12 @@ export default function LandingSection({ image, isScanned }) {
         }}
       >
         <div
-          className="relative overflow-hidden rounded-md shadow-[0_20px_60px_rgba(44,43,40,0.12)]"
+          className="relative overflow-hidden rounded-md shadow-[0_20px_60px_rgba(44,43,40,0.12)] transition-transform duration-200 ease-out will-change-transform"
+          style={{
+            transform: isHovering
+              ? `rotateX(${tilt.x}deg) rotateY(${tilt.y}deg)`
+              : "rotateX(0deg) rotateY(0deg)"
+          }}
         >
           <img
             src={

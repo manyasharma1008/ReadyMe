@@ -14,10 +14,8 @@ export default function Home() {
   const navigate = useNavigate()
 
   const handleTryOn = () => {
-    if (isScanned) {
-      navigate("/camera")
-    }
-  }
+  navigate("/camera")
+}
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
