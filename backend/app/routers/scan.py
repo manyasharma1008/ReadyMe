@@ -55,14 +55,14 @@ class VisualizationResponse(BaseModel):
     """Response model for landmark visualization."""
     success: bool
     image_data: str = Field(..., description="Base64 encoded visualization image")
-    calibration_factor: float = Field(None, description="Calibration factor used")
+    calibration_factor: float | None = Field(None, description="Calibration factor used")
 
 
 class CalibrationStatusResponse(BaseModel):
     """Response model for calibration status."""
     is_calibrated: bool
-    calibration_factor: float = None
-    user_height_cm: float = None
+    calibration_factor: float | None = None
+    user_height_cm: float | None = None
 
 @router.post("/measure", response_model=ScanMeasureResponse)
 async def measure_body(
