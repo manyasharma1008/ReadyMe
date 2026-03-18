@@ -29,13 +29,26 @@ export function useScanImage() {
         throw new ApiError("Empty response from server", 500);
       }
 
-      if (response.success === false) {
-        throw new ApiError(response.message || "Scan failed", response.status || 500);
+      // Handle both wrapped format { success, measurements } and direct format { height, chest, ... }
+      let measurements = null;
+      let scanSuccess = false;
+
+      if (response.success !== undefined) {
+        // Wrapped format: { success: true/false, measurements: {...}, message: "..." }
+        scanSuccess = response.success === true;
+        if (!scanSuccess) {
+          throw new ApiError(response.message || "Scan failed", response.status || 500);
+        }
+        measurements = response.measurements;
+      } else if (response.height !== undefined || response.chest !== undefined) {
+        // Direct format: { height: 220, chest: 70, ... }
+        scanSuccess = true;
+        measurements = response;
       }
 
-      if (response.measurements) {
-        setMeasurements(response.measurements);
-        return response.measurements;
+      if (measurements) {
+        setMeasurements(measurements);
+        return measurements;
       }
 
       throw new ApiError("No measurements returned", 500);
