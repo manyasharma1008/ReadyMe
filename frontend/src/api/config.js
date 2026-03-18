@@ -3,8 +3,15 @@
  * Centralized configuration for API endpoints and settings
  */
 
-// Base URL from environment variable, fallback to localhost
-export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
+// Base URL from environment variable
+// For production: Set VITE_API_BASE_URL in Vercel environment variables
+// Example: https://your-render-backend.onrender.com
+export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || ''
+
+// Validate API_BASE_URL is set in production
+if (!API_BASE_URL && import.meta.env.PROD) {
+  console.error('ERROR: VITE_API_BASE_URL is not set for production!')
+}
 
 // Request timeout in milliseconds
 export const API_TIMEOUT = parseInt(import.meta.env.VITE_API_TIMEOUT || '30000', 10)
