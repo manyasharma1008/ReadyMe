@@ -64,11 +64,22 @@ export async function apiClient(endpoint, options = {}, retryCount = 0) {
 
     if (!response.ok) {
       console.error(`[API] Error ${response.status}:`, data);
-      throw new ApiError(
-        data?.message || data || "Request failed",
-        response.status,
-        data
-      );
+
+      // Handle validation errors (422)
+      let errorMessage = "Request failed";
+      if (response.status === 422 && data?.detail) {
+        // FastAPI validation error
+        if (Array.isArray(data.detail)) {
+          errorMessage = data.detail.map(d => d.msg || d.loc || JSON.stringify(d)).join(', ');
+        } else {
+          errorMessage = data.detail;
+        }
+        console.error('[API] Validation error details:', data.detail);
+      } else {
+        errorMessage = data?.message || data || "Request failed";
+      }
+
+      throw new ApiError(errorMessage, response.status, data);
     }
 
     console.log(`[API] Success: ${response.status}`);
@@ -115,6 +126,9 @@ export function apiGet(endpoint) {
 
 // JSON POST request
 export function apiPost(endpoint, body) {
+  // Debug: Log the payload being sent
+  console.log(`[API POST] ${endpoint}`, JSON.stringify(body, null, 2));
+
   return apiClient(endpoint, {
     method: "POST",
     headers: {
