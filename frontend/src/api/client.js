@@ -27,11 +27,20 @@ export class ApiError extends Error {
 
 // Core API client with timeout handling
 export async function apiClient(endpoint, options = {}) {
+  // Validate API_BASE_URL is configured
+  if (!API_BASE_URL) {
+    console.error('API_BASE_URL is not configured. Set VITE_API_BASE_URL environment variable.')
+    throw new ApiError('API not configured. Please refresh and try again.', 0);
+  }
+
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), API_TIMEOUT);
 
   try {
-    const response = await fetch(`${API_BASE_URL}${endpoint}`, {
+    const url = `${API_BASE_URL}${endpoint}`;
+    console.log(`API Request: ${options.method || 'GET'} ${url}`);
+
+    const response = await fetch(url, {
       ...options,
       signal: controller.signal,
     });
@@ -47,6 +56,7 @@ export async function apiClient(endpoint, options = {}) {
     }
 
     if (!response.ok) {
+      console.error(`API Error: ${response.status}`, data);
       throw new ApiError(
         data?.message || data || "Request failed",
         response.status,
@@ -56,12 +66,19 @@ export async function apiClient(endpoint, options = {}) {
 
     return data;
   } catch (error) {
+    console.error('API Request failed:', error);
+
     if (error.name === "AbortError") {
-      throw new ApiError("Request timeout", 408);
+      throw new ApiError("Request timeout. Please try again.", 408);
     }
 
     if (error instanceof ApiError) {
       throw error;
+    }
+
+    // Network error (CORS, connection refused, etc.)
+    if (error.name === 'TypeError' && error.message.includes('fetch')) {
+      throw new ApiError('Cannot connect to server. Please check your connection.', 0);
     }
 
     throw new ApiError(error.message || "Network error", 0);

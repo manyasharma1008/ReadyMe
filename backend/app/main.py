@@ -1,3 +1,4 @@
+import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.db.supabase import supabase
@@ -9,7 +10,7 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# ✅ FIXED CORS CONFIG
+# CORS CONFIG - Add your Vercel frontend URL here
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -17,7 +18,7 @@ app.add_middleware(
         "http://localhost:5174",
         "http://127.0.0.1:5173",
         "http://127.0.0.1:5174",
-        "https://ready-me-liart.vercel.app",  # ✅ ADD THIS
+        "https://ready-me-liart.vercel.app",  # UPDATE with your actual Vercel URL
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -45,3 +46,9 @@ def test_db():
         return {"data": data.data}
     except Exception as e:
         return {"error": str(e)}
+
+# For Render deployment - use dynamic port
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
