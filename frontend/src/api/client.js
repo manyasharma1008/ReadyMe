@@ -1,4 +1,4 @@
-import { API_BASE_URL, API_TIMEOUT } from "./config";
+import { API_BASE_URL, API_TIMEOUT, API_RETRIES } from "./config";
 
 export class ApiError extends Error {
   constructor(message, status = 0, data = null) {
@@ -12,8 +12,8 @@ export class ApiError extends Error {
     if (this.status === 422) {
       return "Invalid request format. Please check your input.";
     }
-    if (this.status === 408) {
-      return "Request timed out. Please try again.";
+    if (this.status === 408 || this.status === 504) {
+      return "Request timed out. Server is taking too long. Please try again.";
     }
     if (this.status >= 500) {
       return "Server error. Please try again later.";
@@ -21,32 +21,39 @@ export class ApiError extends Error {
     if (this.status >= 400) {
       return this.message || "Request failed.";
     }
+    if (this.status === 0) {
+      return "Cannot connect to server. Please check your connection.";
+    }
     return this.message || "An unexpected error occurred.";
   }
 }
 
-// Core API client with timeout handling
-export async function apiClient(endpoint, options = {}) {
+// Core API client with timeout and retry handling
+export async function apiClient(endpoint, options = {}, retryCount = 0) {
   // Validate API_BASE_URL is configured
   if (!API_BASE_URL) {
     console.error('API_BASE_URL is not configured. Set VITE_API_BASE_URL environment variable.')
     throw new ApiError('API not configured. Please refresh and try again.', 0);
   }
 
+  const url = `${API_BASE_URL}${endpoint}`;
+  console.log(`[API] ${new Date().toISOString()} - ${options.method || 'GET'} ${url}`);
+
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), API_TIMEOUT);
+  const timeoutId = setTimeout(() => {
+    console.warn(`[API] Request timeout after ${API_TIMEOUT}ms`);
+    controller.abort();
+  }, API_TIMEOUT);
 
   try {
-    const url = `${API_BASE_URL}${endpoint}`;
-    console.log(`API Request: ${options.method || 'GET'} ${url}`);
-
     const response = await fetch(url, {
       ...options,
       signal: controller.signal,
     });
 
-    const contentType = response.headers.get("content-type");
+    clearTimeout(timeoutId);
 
+    const contentType = response.headers.get("content-type");
     let data = null;
 
     if (contentType && contentType.includes("application/json")) {
@@ -56,7 +63,7 @@ export async function apiClient(endpoint, options = {}) {
     }
 
     if (!response.ok) {
-      console.error(`API Error: ${response.status}`, data);
+      console.error(`[API] Error ${response.status}:`, data);
       throw new ApiError(
         data?.message || data || "Request failed",
         response.status,
@@ -64,12 +71,26 @@ export async function apiClient(endpoint, options = {}) {
       );
     }
 
+    console.log(`[API] Success: ${response.status}`);
     return data;
+
   } catch (error) {
-    console.error('API Request failed:', error);
+    clearTimeout(timeoutId);
+    console.error(`[API] Request failed (attempt ${retryCount + 1}):`, error.name, error.message);
+
+    // Retry logic for network errors or timeouts
+    const isRetryable = error.name === 'AbortError' ||
+                        error.name === 'TypeError' ||
+                        error.status >= 500;
+
+    if (isRetryable && retryCount < API_RETRIES) {
+      console.log(`[API] Retrying... (${retryCount + 1}/${API_RETRIES})`);
+      await new Promise(resolve => setTimeout(resolve, 1000 * (retryCount + 1))); // Exponential backoff
+      return apiClient(endpoint, options, retryCount + 1);
+    }
 
     if (error.name === "AbortError") {
-      throw new ApiError("Request timeout. Please try again.", 408);
+      throw new ApiError("Request timed out. Server may be cold starting. Please try again.", 408);
     }
 
     if (error instanceof ApiError) {
@@ -82,8 +103,6 @@ export async function apiClient(endpoint, options = {}) {
     }
 
     throw new ApiError(error.message || "Network error", 0);
-  } finally {
-    clearTimeout(timeoutId);
   }
 }
 
