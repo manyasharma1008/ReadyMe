@@ -261,14 +261,36 @@ function BodyScan() {
         console.log("Scan response:", scanResponse)
 
         // Step 2: Check if scan was successful
+        // Handle both wrapped format { success, measurements } and direct format { height, chest, ... }
         if (!scanResponse) {
           setLocalError("No response from scan API")
           return
         }
 
-        if (!scanResponse.success) {
+        // Normalize response: handle both wrapped and direct formats
+        let measurements = null
+        let scanSuccess = false
+        let scanMessage = "Scan completed"
+
+        if (scanResponse.success !== undefined) {
+          // Wrapped format: { success: true/false, measurements: {...}, message: "..." }
+          scanSuccess = scanResponse.success === true
+          scanMessage = scanResponse.message || scanMessage
+          measurements = scanResponse.measurements
+        } else if (scanResponse.height !== undefined || scanResponse.chest !== undefined) {
+          // Direct format: { height: 220, chest: 70, ... }
+          scanSuccess = true
+          measurements = scanResponse
+        }
+
+        if (!scanSuccess) {
           // Scan failed - show error from backend
-          setLocalError(scanResponse.message || "Scan failed")
+          setLocalError(scanMessage || "Scan failed")
+          return
+        }
+
+        if (!measurements) {
+          setLocalError("No measurements in response")
           return
         }
 
@@ -282,19 +304,13 @@ function BodyScan() {
           console.warn("Visualization failed:", visErr)
         }
 
-        // Step 4: Get measurements from scan response
-        const m = scanResponse.measurements
-        if (!m) {
-          setLocalError("No measurements in response")
-          return
-        }
-
+        // Step 4: Validate and normalize measurements
         const validMeasurements = {
-          height: Number(m.height) || 0,
-          chest: Number(m.chest) || 0,
-          waist: Number(m.waist) || 0,
-          hips: Number(m.hips) || 0,
-          shoulder_width: Number(m.shoulder_width) || 0
+          height: Number(measurements.height) || 0,
+          chest: Number(measurements.chest) || 0,
+          waist: Number(measurements.waist) || 0,
+          hips: Number(measurements.hips) || 0,
+          shoulderWidth: Number(measurements.shoulder_width || measurements.shoulderWidth) || 0
         }
 
         if (validMeasurements.height <= 0 || validMeasurements.chest <= 0) {
@@ -304,6 +320,9 @@ function BodyScan() {
 
         // Store measurements
         setMeasurements(validMeasurements)
+
+        // Extract landmarks from response (handle both wrapped and direct formats)
+        const landmarks = scanResponse.landmarks || []
 
         // Step 5: Draw visualization on canvas
         if (visualizeResponse && visualizeResponse.success && visualizeResponse.image_data) {
@@ -334,15 +353,15 @@ function BodyScan() {
           img.onerror = () => {
             console.error("Failed to load visualization image")
             // Fallback to raw landmarks
-            if (scanResponse.landmarks && scanResponse.landmarks.length > 0) {
-              setCurrentLandmarks(scanResponse.landmarks)
+            if (landmarks && landmarks.length > 0) {
+              setCurrentLandmarks(landmarks)
               setShowLandmarks(true)
             }
           }
-        } else if (scanResponse.landmarks && scanResponse.landmarks.length > 0) {
+        } else if (landmarks && landmarks.length > 0) {
           // Fallback: use raw landmarks from scan response
-          console.log("Using raw landmarks:", scanResponse.landmarks.length)
-          setCurrentLandmarks(scanResponse.landmarks)
+          console.log("Using raw landmarks:", landmarks.length)
+          setCurrentLandmarks(landmarks)
           setShowLandmarks(true)
         }
 
