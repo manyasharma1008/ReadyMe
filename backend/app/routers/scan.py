@@ -51,6 +51,11 @@ class MeasureWithCalibrationRequest(BaseModel):
     user_height_cm: float = Field(..., description="User's known height in cm (used for calibration)")
 
 
+class MeasureBase64Request(BaseModel):
+    """Request model for base64 image measurement."""
+    image_data: str = Field(..., description="Base64 encoded image data")
+
+
 class VisualizationResponse(BaseModel):
     """Response model for landmark visualization."""
     success: bool
@@ -176,12 +181,12 @@ async def measure_body(
 
 
 @router.post("/measure-base64", response_model=ScanMeasureResponse)
-async def measure_body_base64(payload: dict):
+async def measure_body_base64(payload: MeasureBase64Request):
     """
     Analyze a body image from base64 string and extract measurements.
     """
     try:
-        image_data = payload.get("image_data")
+        image_data = payload.image_data
         if not image_data:
             return ScanMeasureResponse(
                 success=False,
