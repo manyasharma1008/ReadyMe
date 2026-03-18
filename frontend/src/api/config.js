@@ -3,18 +3,25 @@
  * Centralized configuration for API endpoints and settings
  */
 
-// Base URL from environment variable
-// For production: Set VITE_API_BASE_URL in Vercel environment variables
-// Example: https://your-render-backend.onrender.com
-export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || ''
+// Base URL from environment variable - remove trailing slashes for consistency
+const getApiBaseUrl = () => {
+  const url = import.meta.env.VITE_API_BASE_URL || ''
+  // Remove trailing slashes to ensure consistent URL construction
+  return url.replace(/\/+$/, '')
+}
+
+export const API_BASE_URL = getApiBaseUrl()
 
 // Validate API_BASE_URL is set in production
 if (!API_BASE_URL && import.meta.env.PROD) {
   console.error('ERROR: VITE_API_BASE_URL is not set for production!')
 }
 
-// Request timeout in milliseconds
-export const API_TIMEOUT = parseInt(import.meta.env.VITE_API_TIMEOUT || '30000', 10)
+// Request timeout - increased to 60s for Render cold starts
+export const API_TIMEOUT = parseInt(import.meta.env.VITE_API_TIMEOUT || '60000', 10)
+
+// Number of retries for failed requests
+export const API_RETRIES = parseInt(import.meta.env.VITE_API_RETRIES || '2', 10)
 
 // API Endpoints
 export const ENDPOINTS = {
