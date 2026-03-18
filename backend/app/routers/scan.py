@@ -1,7 +1,7 @@
 import base64
 import io
 import cv2
-from fastapi import APIRouter, UploadFile, File, HTTPException, Body
+from fastapi import APIRouter, UploadFile, File, HTTPException
 from PIL import Image
 import numpy as np
 from pydantic import BaseModel, Field
@@ -55,14 +55,73 @@ class VisualizationResponse(BaseModel):
     """Response model for landmark visualization."""
     success: bool
     image_data: str = Field(..., description="Base64 encoded visualization image")
-    calibration_factor: float = Field(None, description="Calibration factor used")
+    calibration_factor: float | None = Field(None, description="Calibration factor used")
 
 
 class CalibrationStatusResponse(BaseModel):
     """Response model for calibration status."""
     is_calibrated: bool
-    calibration_factor: float = None
-    user_height_cm: float = None
+    calibration_factor: float | None = None
+    user_height_cm: float | None = None
+
+
+def _safe_decode_image(image_data: str) -> np.ndarray:
+    """
+    Safely decode base64 image to numpy array.
+    Returns None if decoding fails.
+    """
+    try:
+        image_bytes = base64.b64decode(image_data)
+        image_pil = Image.open(io.BytesIO(image_bytes))
+        image_array = np.array(image_pil)
+        return image_array
+    except Exception as e:
+        print(f"Image decode error: {e}")
+        return None
+
+
+def _safe_extract_landmarks(image_array: np.ndarray) -> dict:
+    """
+    Safely extract landmarks and convert to JSON format.
+    The extract_body_landmarks function returns a dict with 'landmarks' key, not a MediaPipe results object.
+    """
+    try:
+        preprocessed = preprocess_image(image_array)
+        result = extract_body_landmarks(preprocessed)
+
+        # The result is a dict with 'landmarks' key, not a MediaPipe results object
+        if result is None or 'landmarks' not in result:
+            return {"landmarks": []}
+
+        landmarks_list = result.get('landmarks', [])
+
+        if not landmarks_list:
+            return {"landmarks": []}
+
+        # Convert to list of dicts if needed (ensure JSON serializable)
+        landmarks_json = []
+        for lm in landmarks_list:
+            if hasattr(lm, 'x'):  # MediaPipe landmark object
+                landmarks_json.append({
+                    "x": float(lm.x),
+                    "y": float(lm.y),
+                    "z": float(lm.z),
+                    "visibility": float(lm.visibility)
+                })
+            else:  # Already a dict
+                landmarks_json.append({
+                    "x": float(lm.get('x', 0)),
+                    "y": float(lm.get('y', 0)),
+                    "z": float(lm.get('z', 0)),
+                    "visibility": float(lm.get('visibility', 0))
+                })
+
+        return {"landmarks": landmarks_json}
+
+    except Exception as e:
+        print(f"Landmark extraction error: {e}")
+        return {"landmarks": []}
+
 
 @router.post("/measure", response_model=ScanMeasureResponse)
 async def measure_body(
@@ -70,28 +129,30 @@ async def measure_body(
 ):
     """
     Analyze a body image and extract measurements.
-
-    Accepts an image file upload and returns body measurements including:
-    - height, chest, waist, hips, shoulder_width
     """
     try:
         # Read and validate image
         contents = await image.read()
         image_pil = Image.open(io.BytesIO(contents))
-
-        # Convert to numpy array
         image_array = np.array(image_pil)
 
-        # Preprocess the image
-        preprocessed = preprocess_image(image_array)
+        if image_array.size == 0:
+            return ScanMeasureResponse(
+                success=False,
+                measurements=None,
+                message="Invalid image: empty or corrupted",
+                landmarks=[]
+            )
 
         # Extract body landmarks using MediaPipe
-        landmarks = extract_body_landmarks(preprocessed)
+        landmarks = _safe_extract_landmarks(image_array)
 
-        if landmarks is None:
-            raise HTTPException(
-                status_code=400,
-                detail="Could not detect body in image. Please ensure the image shows a full body clearly."
+        if landmarks is None or not landmarks.get('landmarks'):
+            return ScanMeasureResponse(
+                success=False,
+                measurements=None,
+                message="Could not detect body in image. Please ensure the image shows a full body clearly.",
+                landmarks=[]
             )
 
         # Calculate measurements from landmarks
@@ -99,41 +160,64 @@ async def measure_body(
 
         return ScanMeasureResponse(
             success=True,
-            measurements=BodyMeasurements(**measurements)
+            measurements=BodyMeasurements(**measurements),
+            message="Measurements extracted successfully",
+            landmarks=landmarks.get('landmarks', [])
         )
 
-    except HTTPException:
-        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error processing image: {str(e)}")
+        print(f"Measure endpoint error: {e}")
+        return ScanMeasureResponse(
+            success=False,
+            measurements=None,
+            message=f"Error processing image: {str(e)}",
+            landmarks=[]
+        )
 
 
 @router.post("/measure-base64", response_model=ScanMeasureResponse)
 async def measure_body_base64(payload: dict):
     """
     Analyze a body image from base64 string and extract measurements.
-    Expects JSON body: {"image_data": "base64_string"}
     """
     try:
         image_data = payload.get("image_data")
         if not image_data:
-            raise HTTPException(status_code=422, detail="Missing 'image_data' in request body")
+            return ScanMeasureResponse(
+                success=False,
+                measurements=None,
+                message="Missing 'image_data' in request body",
+                landmarks=[]
+            )
 
         # Decode base64 image
-        image_bytes = base64.b64decode(image_data)
-        image_pil = Image.open(io.BytesIO(image_bytes))
-        image_array = np.array(image_pil)
+        image_array = _safe_decode_image(image_data)
 
-        # Preprocess the image
-        preprocessed = preprocess_image(image_array)
+        if image_array is None:
+            return ScanMeasureResponse(
+                success=False,
+                measurements=None,
+                message="Invalid base64 image data. Please provide a valid image.",
+                landmarks=[]
+            )
+
+        if image_array.size == 0:
+            return ScanMeasureResponse(
+                success=False,
+                measurements=None,
+                message="Invalid image: empty or corrupted",
+                landmarks=[]
+            )
 
         # Extract body landmarks using MediaPipe
-        landmarks = extract_body_landmarks(preprocessed)
+        landmarks = _safe_extract_landmarks(image_array)
 
-        if landmarks is None:
-            raise HTTPException(
-                status_code=400,
-                detail="Could not detect body in image. Please ensure the image shows a full body clearly."
+        if landmarks is None or not landmarks.get('landmarks'):
+            return ScanMeasureResponse(
+                success=False,
+                measurements=None,
+                message="Could not detect body in image. Please ensure the image shows a full body clearly.",
+                landmarks=[]
             )
 
         # Calculate measurements from landmarks
@@ -141,11 +225,19 @@ async def measure_body_base64(payload: dict):
 
         return ScanMeasureResponse(
             success=True,
-            measurements=BodyMeasurements(**measurements)
+            measurements=BodyMeasurements(**measurements),
+            message="Measurements extracted successfully",
+            landmarks=landmarks.get('landmarks', [])
         )
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error processing image: {str(e)}")
+        print(f"Measure-base64 endpoint error: {e}")
+        return ScanMeasureResponse(
+            success=False,
+            measurements=None,
+            message=f"Error processing image: {str(e)}",
+            landmarks=[]
+        )
 
 
 # ========== Calibration Endpoints ==========
@@ -154,26 +246,26 @@ async def measure_body_base64(payload: dict):
 async def calibrate_with_height(payload: CalibrationRequest):
     """
     Calibrate the measurement system using user's known height.
-    This is the most accurate method - user provides their actual height.
-
-    The calibration factor will be stored globally and used for subsequent measurements.
     """
     try:
         # Decode base64 image
-        image_bytes = base64.b64decode(payload.image_data)
-        image_pil = Image.open(io.BytesIO(image_bytes))
-        image_array = np.array(image_pil)
+        image_array = _safe_decode_image(payload.image_data)
 
-        # Preprocess the image
-        preprocessed = preprocess_image(image_array)
+        if image_array is None:
+            return CalibrationResponse(
+                success=False,
+                calibration_factor=0.0,
+                message="Invalid base64 image data"
+            )
 
         # Extract body landmarks
-        landmarks_data = extract_body_landmarks(preprocessed)
+        landmarks_data = _safe_extract_landmarks(image_array)
 
-        if landmarks_data is None:
-            raise HTTPException(
-                status_code=400,
-                detail="Could not detect body in image. Please ensure the image shows a full body clearly."
+        if landmarks_data is None or not landmarks_data.get('landmarks'):
+            return CalibrationResponse(
+                success=False,
+                calibration_factor=0.0,
+                message="Could not detect body in image"
             )
 
         # Perform calibration using user's known height
@@ -190,36 +282,36 @@ async def calibrate_with_height(payload: CalibrationRequest):
         )
 
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        return CalibrationResponse(
+            success=False,
+            calibration_factor=0.0,
+            message=str(e)
+        )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error calibrating: {str(e)}")
+        return CalibrationResponse(
+            success=False,
+            calibration_factor=0.0,
+            message=f"Error calibrating: {str(e)}"
+        )
 
 
 @router.post("/calibrate/reference", response_model=CalibrationResponse)
 async def calibrate_with_reference_object(payload: ReferenceCalibrationRequest):
     """
     Calibrate using a known reference object in the frame.
-
-    Common references:
-    - Credit card: 8.56cm width
-    - A4 paper: 21cm width
-    - Smartphone: 7-8cm width
     """
     try:
-        # Reference object sizes in cm
         reference_sizes = {
             'credit_card': 8.56,
             'a4_paper': 21.0,
             'smartphone': 7.5,
         }
 
-        # Determine actual width
         if payload.reference_type and payload.reference_type.lower() in reference_sizes:
             known_width = reference_sizes[payload.reference_type.lower()]
         else:
             known_width = payload.reference_actual_width
 
-        # Perform calibration
         calibration_factor = calibrate_with_reference(
             payload.reference_pixel_width,
             known_width
@@ -232,9 +324,17 @@ async def calibrate_with_reference_object(payload: ReferenceCalibrationRequest):
         )
 
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        return CalibrationResponse(
+            success=False,
+            calibration_factor=0.0,
+            message=str(e)
+        )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error calibrating: {str(e)}")
+        return CalibrationResponse(
+            success=False,
+            calibration_factor=0.0,
+            message=f"Error calibrating: {str(e)}"
+        )
 
 
 @router.get("/calibrate/status", response_model=CalibrationStatusResponse)
@@ -261,27 +361,28 @@ async def reset_calibration_endpoint():
 async def measure_with_calibration(payload: MeasureWithCalibrationRequest):
     """
     Measure body with calibration applied.
-    Uses the user's provided height to calibrate, then calculates measurements.
-
-    This provides more accurate measurements than the standard /measure endpoint
-    because it accounts for camera distance and perspective.
     """
     try:
         # Decode base64 image
-        image_bytes = base64.b64decode(payload.image_data)
-        image_pil = Image.open(io.BytesIO(image_bytes))
-        image_array = np.array(image_pil)
+        image_array = _safe_decode_image(payload.image_data)
 
-        # Preprocess the image
-        preprocessed = preprocess_image(image_array)
+        if image_array is None:
+            return ScanMeasureResponse(
+                success=False,
+                measurements=None,
+                message="Invalid base64 image data",
+                landmarks=[]
+            )
 
         # Extract body landmarks
-        landmarks_data = extract_body_landmarks(preprocessed)
+        landmarks_data = _safe_extract_landmarks(image_array)
 
-        if landmarks_data is None:
-            raise HTTPException(
-                status_code=400,
-                detail="Could not detect body in image. Please ensure the image shows a full body clearly."
+        if landmarks_data is None or not landmarks_data.get('landmarks'):
+            return ScanMeasureResponse(
+                success=False,
+                measurements=None,
+                message="Could not detect body in image. Please ensure the image shows a full body clearly.",
+                landmarks=[]
             )
 
         # Calibrate using user's height
@@ -301,60 +402,72 @@ async def measure_with_calibration(payload: MeasureWithCalibrationRequest):
         return ScanMeasureResponse(
             success=True,
             measurements=BodyMeasurements(**measurements),
-            message=f"Calibrated with height {payload.user_height_cm}cm"
+            message=f"Calibrated with height {payload.user_height_cm}cm",
+            landmarks=landmarks_data.get('landmarks', [])
         )
 
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        return ScanMeasureResponse(
+            success=False,
+            measurements=None,
+            message=str(e),
+            landmarks=[]
+        )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error processing image: {str(e)}")
+        return ScanMeasureResponse(
+            success=False,
+            measurements=None,
+            message=f"Error processing image: {str(e)}",
+            landmarks=[]
+        )
 
 
 # ========== Visualization Endpoint ==========
 
-@router.post("/visualize", response_model=VisualizationResponse)
+@router.post("/visualize")
 async def visualize_landmarks(payload: dict):
     """
     Generate visualization of body landmarks.
-
-    Returns an image with:
-    - Colored landmark markers at key body points
-    - Measurement lines between landmarks
-    - Body outline
-    - Calibration info (if provided in request)
     """
     try:
-        # Get optional parameters
         image_data = payload.get("image_data")
         user_height_cm = payload.get("user_height_cm")
         show_outline = payload.get("show_outline", True)
         show_info = payload.get("show_info", True)
 
         if not image_data:
-            raise HTTPException(status_code=422, detail="Missing 'image_data' in request body")
+            return {
+                "success": False,
+                "error": "Missing 'image_data' in request body",
+                "image_data": None,
+                "calibration_factor": None
+            }
 
         # Decode base64 image
-        image_bytes = base64.b64decode(image_data)
-        image_pil = Image.open(io.BytesIO(image_bytes))
-        image_array = np.array(image_pil)
+        image_array = _safe_decode_image(image_data)
 
-        # Preprocess the image
-        preprocessed = preprocess_image(image_array)
+        if image_array is None:
+            return {
+                "success": False,
+                "error": "Invalid base64 image data",
+                "image_data": None,
+                "calibration_factor": None
+            }
 
         # Extract body landmarks
-        landmarks_data = extract_body_landmarks(preprocessed)
+        landmarks_data = _safe_extract_landmarks(image_array)
 
-        if landmarks_data is None:
-            raise HTTPException(
-                status_code=400,
-                detail="Could not detect body in image. Please ensure the image shows a full body clearly."
-            )
+        if landmarks_data is None or not landmarks_data.get('landmarks'):
+            return {
+                "success": False,
+                "error": "Could not detect body in image",
+                "image_data": None,
+                "calibration_factor": None
+            }
 
         # Get calibration factor if available
         calib = get_calibration_system()
         calibration_factor = calib.calibration_factor if calib.is_calibrated() else None
-
-        # If user provides height, we can use it for info display
         display_height = user_height_cm or calib.user_height_cm
 
         # Create visualization
@@ -371,13 +484,17 @@ async def visualize_landmarks(payload: dict):
         _, buffer = cv2.imencode('.png', vis_image)
         vis_base64 = base64.b64encode(buffer).decode('utf-8')
 
-        return VisualizationResponse(
-            success=True,
-            image_data=vis_base64,
-            calibration_factor=calibration_factor
-        )
+        return {
+            "success": True,
+            "image_data": vis_base64,
+            "calibration_factor": calibration_factor,
+            "error": None
+        }
 
-    except HTTPException:
-        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error creating visualization: {str(e)}")
+        return {
+            "success": False,
+            "error": f"Error creating visualization: {str(e)}",
+            "image_data": None,
+            "calibration_factor": None
+        }

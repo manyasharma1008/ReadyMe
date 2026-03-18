@@ -15,6 +15,12 @@ export const ENDPOINTS = {
   SCAN_MEASURE: '/scan/measure',
   SCAN_MEASURE_BASE64: '/scan/measure-base64',
 
+  // Calibrated measurement endpoints (new)
+  SCAN_CALIBRATE: '/scan/calibrate',
+  SCAN_MEASURE_CALIBRATED: '/scan/measure-calibrated',
+  SCAN_VISUALIZE: '/scan/visualize',
+  SCAN_CALIBRATE_STATUS: '/scan/calibrate/status',
+
   // Size prediction endpoints
   SIZE_PREDICT: '/size/predict',
   SIZE_VALIDATE: '/size/validate',

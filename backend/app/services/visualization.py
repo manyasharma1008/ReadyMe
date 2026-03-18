@@ -25,8 +25,18 @@ def draw_landmark_markers(image: np.ndarray, landmarks: list) -> np.ndarray:
     Returns:
         Image with landmark markers overlaid
     """
-    output = image.copy()
-    h, w = image.shape[:2]
+    # Validate inputs
+    if image is None or image.size == 0:
+        return np.zeros((480, 640, 3), dtype=np.uint8)
+
+    if not landmarks or len(landmarks) == 0:
+        return image.copy()
+
+    try:
+        output = image.copy()
+        h, w = image.shape[:2]
+    except Exception:
+        return np.zeros((480, 640, 3), dtype=np.uint8)
 
     # Define landmark groups with colors
     # Format: (indices, color in BGR)
@@ -92,8 +102,18 @@ def draw_body_outline(image: np.ndarray, landmarks: list) -> np.ndarray:
     Returns:
         Image with body outline
     """
-    output = image.copy()
-    h, w = image.shape[:2]
+    # Validate inputs
+    if image is None or image.size == 0:
+        return np.zeros((480, 640, 3), dtype=np.uint8)
+
+    if not landmarks or len(landmarks) == 0:
+        return image.copy()
+
+    try:
+        output = image.copy()
+        h, w = image.shape[:2]
+    except Exception:
+        return image.copy()
 
     # Define connections for body outline
     connections = [
@@ -191,17 +211,28 @@ def create_visualization(image: np.ndarray, landmarks: list,
     Returns:
         Fully annotated image
     """
-    output = image.copy()
+    # Validate inputs - return original image if invalid
+    if image is None or image.size == 0:
+        return np.zeros((480, 640, 3), dtype=np.uint8)
 
-    # Draw landmark markers
-    output = draw_landmark_markers(output, landmarks)
+    if not landmarks or len(landmarks) == 0:
+        return image.copy()
 
-    # Draw body outline
-    if show_outline:
-        output = draw_body_outline(output, landmarks)
+    try:
+        output = image.copy()
 
-    # Draw calibration info
-    if show_info:
-        output = draw_calibration_info(output, calibration_factor, user_height)
+        # Draw landmark markers
+        output = draw_landmark_markers(output, landmarks)
 
-    return output
+        # Draw body outline
+        if show_outline:
+            output = draw_body_outline(output, landmarks)
+
+        # Draw calibration info
+        if show_info:
+            output = draw_calibration_info(output, calibration_factor, user_height)
+
+        return output
+    except Exception:
+        # Return original image on any error
+        return image.copy()

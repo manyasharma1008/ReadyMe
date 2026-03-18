@@ -20,8 +20,9 @@ class ScanMeasureRequest(BaseModel):
 class ScanMeasureResponse(BaseModel):
     """Response model for body scan measurement."""
     success: bool = Field(..., description="Whether the scan was successful")
-    measurements: BodyMeasurements = Field(..., description="Extracted body measurements")
+    measurements: Optional[BodyMeasurements] = Field(None, description="Extracted body measurements")
     message: Optional[str] = Field(None, description="Optional message")
+    landmarks: Optional[list] = Field(default_factory=list, description="Body landmarks for visualization")
 
 
 class ProfileSaveRequest(BaseModel):

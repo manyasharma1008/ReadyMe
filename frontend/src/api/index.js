@@ -21,10 +21,20 @@ export {
   scanImage,
   scanMeasureImage,
   scanMeasureBase64,
+  scanMeasureCalibrated,
+  visualizeLandmarks,
+  getCalibrationStatus,
   fileToBase64,
   isValidImageFile,
   getSupportedImageTypes,
 } from './scan';
+
+// Profile API
+export {
+  saveProfile,
+  getProfile,
+  updateProfile,
+} from './profile';
 
 // Size API
 export {
