@@ -18,7 +18,7 @@ app.add_middleware(
         "http://localhost:5174",
         "http://127.0.0.1:5173",
         "http://127.0.0.1:5174",
-        "https://ready-me-liart.vercel.app",  # UPDATE with your actual Vercel URL
+        "https://ready-me-liart.vercel.app",  # UPDATE with youractual Vercel URL
     ],
     allow_credentials=True,
     allow_methods=["*"],
