@@ -117,6 +117,58 @@ measurement.py
 
 ---
 
+### Calibration System
+
+The system supports two calibration methods for accurate body measurements:
+
+1. **Height-based calibration** (`/scan/calibrate`, `/scan/measure-calibrated`)
+   - User provides their known height in cm
+   - System calculates calibration factor (pixels/cm) from MediaPipe landmarks
+   - Most accurate method
+
+2. **Reference object calibration** (`/scan/calibrate/reference`)
+   - Uses known objects in frame (credit card, A4 paper, smartphone)
+   - Less accurate but doesn't require user height
+
+Key files:
+
+```
+app/services/measurement.py      # CalibrationSystem class
+app/services/visualization.py    # Landmark visualization
+app/routers/scan.py             # Calibration endpoints
+```
+
+Calibration endpoints:
+
+```
+POST /scan/calibrate                    # Calibrate with user height
+POST /scan/calibrate/reference           # Calibrate with reference object
+GET  /scan/calibrate/status              # Get calibration status
+POST /scan/calibrate/reset               # Reset calibration
+POST /scan/measure-calibrated            # Measure with calibration applied
+POST /scan/visualize                     # Generate landmark visualization
+```
+
+---
+
+### Visualization Service
+
+Live landmark overlay during body scanning. Draws:
+
+* Colored dots at key body points (nose, shoulders, hips, ankles, knees, elbows, wrists)
+* Body outline connecting landmarks
+* Calibration info overlay (when available)
+
+File: `app/services/visualization.py`
+
+Functions:
+- `draw_landmark_markers()` - Draw colored dots at body landmarks
+- `draw_body_outline()` - Connect landmarks with lines
+- `draw_calibration_info()` - Show calibration status on image
+- `create_visualization()` - Full visualization pipeline
+
+---
+
 ### Size Prediction Model
 
 Implemented in:
@@ -222,6 +274,23 @@ PUT /profile/update
 ```
 
 Authentication: JWT token validation via `get_current_user` dependency
+
+---
+
+### Bug Fixes Applied
+
+1. **Pydantic v2 Type Annotations** (app/routers/scan.py)
+   - Changed `float = None` to `float | None = None` for Optional fields
+   - Fixed in `CalibrationStatusResponse` and `VisualizationResponse`
+
+2. **Supabase Lazy Loading** (app/db/supabase.py)
+   - Client now created on-demand, not at import time
+   - Prevents startup failures when Supabase is unavailable
+
+3. **Live Landmark Display** (frontend/src/pages/BodyScan.jsx)
+   - Visualizes body landmarks in real-time during camera scan
+   - Shows colored markers on body points (nose, shoulders, hips, etc.)
+   - Overlay rendered on video feed for immediate feedback
 
 ---
 

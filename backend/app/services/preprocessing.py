@@ -10,107 +10,107 @@ def load_image(image_array: np.ndarray) -> np.ndarray:
         image_array: Input image as numpy array
 
     Returns:
-        Validated image array
+        Validated image array, or None if invalid
     """
     if image_array is None or image_array.size == 0:
-        raise ValueError("Invalid image data")
+        return None
 
-    # Ensure RGB format
-    if len(image_array.shape) == 2:
-        # Grayscale to RGB
-        return cv2.cvtColor(image_array, cv2.COLOR_GRAY2RGB)
-    elif image_array.shape[2] == 4:
-        # RGBA to RGB
-        return cv2.cvtColor(image_array, cv2.COLOR_RGBA2RGB)
-    return image_array
+    try:
+        # Ensure RGB format
+        if len(image_array.shape) == 2:
+            # Grayscale to RGB
+            return cv2.cvtColor(image_array, cv2.COLOR_GRAY2RGB)
+        elif len(image_array.shape) == 3:
+            if image_array.shape[2] == 4:
+                # RGBA to RGB
+                return cv2.cvtColor(image_array, cv2.COLOR_RGBA2RGB)
+            elif image_array.shape[2] == 3:
+                return image_array
+        return None
+    except Exception:
+        return None
 
 
 def resize_image(image: np.ndarray, target_size: tuple = (640, 480)) -> np.ndarray:
     """
     Resize image to a consistent size for processing.
-
-    Args:
-        image: Input image
-        target_size: Target (width, height)
-
-    Returns:
-        Resized image
     """
-    return cv2.resize(image, target_size, interpolation=cv2.INTER_LINEAR)
+    if image is None:
+        return None
+    try:
+        return cv2.resize(image, target_size, interpolation=cv2.INTER_LINEAR)
+    except Exception:
+        return None
 
 
 def normalize_image(image: np.ndarray) -> np.ndarray:
     """
     Normalize image brightness and contrast.
-
-    Args:
-        image: Input image
-
-    Returns:
-        Normalized image
     """
-    # Convert to LAB color space for better normalization
-    lab = cv2.cvtColor(image, cv2.COLOR_RGB2LAB)
-    l_channel, a, b = cv2.split(lab)
+    if image is None:
+        return None
+    try:
+        # Convert to LAB color space for better normalization
+        lab = cv2.cvtColor(image, cv2.COLOR_RGB2LAB)
+        l_channel, a, b = cv2.split(lab)
 
-    # Apply CLAHE to L channel
-    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-    l_channel = clahe.apply(l_channel)
+        # Apply CLAHE to L channel
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        l_channel = clahe.apply(l_channel)
 
-    # Merge channels back
-    lab = cv2.merge([l_channel, a, b])
-    normalized = cv2.cvtColor(lab, cv2.COLOR_LAB2RGB)
+        # Merge channels back
+        lab = cv2.merge([l_channel, a, b])
+        normalized = cv2.cvtColor(lab, cv2.COLOR_LAB2RGB)
 
-    return normalized
+        return normalized
+    except Exception:
+        return image
 
 
 def denoise_image(image: np.ndarray) -> np.ndarray:
     """
     Apply noise reduction to the image.
-
-    Args:
-        image: Input image
-
-    Returns:
-        Denoised image
     """
-    return cv2.fastNlMeansDenoisingColored(image, None, 10, 10, 7, 21)
+    if image is None:
+        return None
+    try:
+        return cv2.fastNlMeansDenoisingColored(image, None, 10, 10, 7, 21)
+    except Exception:
+        return image
 
 
 def enhance_contrast(image: np.ndarray) -> np.ndarray:
     """
     Enhance image contrast using adaptive histogram equalization.
-
-    Args:
-        image: Input image
-
-    Returns:
-        Contrast-enhanced image
     """
-    # Convert to YCrCb
-    ycrcb = cv2.cvtColor(image, cv2.COLOR_RGB2YCrCb)
-    y, cr, cb = cv2.split(ycrcb)
+    if image is None:
+        return None
+    try:
+        # Convert to YCrCb
+        ycrcb = cv2.cvtColor(image, cv2.COLOR_RGB2YCrCb)
+        y, cr, cb = cv2.split(ycrcb)
 
-    # Equalize Y channel
-    y = cv2.equalizeHist(y)
+        # Equalize Y channel
+        y = cv2.equalizeHist(y)
 
-    # Merge and convert back
-    ycrcb = cv2.merge([y, cr, cb])
-    return cv2.cvtColor(ycrcb, cv2.COLOR_YCrCb2RGB)
+        # Merge and convert back
+        ycrcb = cv2.merge([y, cr, cb])
+        return cv2.cvtColor(ycrcb, cv2.COLOR_YCrCb2RGB)
+    except Exception:
+        return image
 
 
 def preprocess_for_mediapipe(image: np.ndarray) -> np.ndarray:
     """
     Prepare image for MediaPipe body tracking.
-
-    Args:
-        image: Input image
-
-    Returns:
-        Preprocessed image ready for MediaPipe
     """
+    if image is None:
+        return None
+
     # Resize to optimal size for MediaPipe
     processed = resize_image(image, (640, 480))
+    if processed is None:
+        return None
 
     # Normalize brightness
     processed = normalize_image(processed)
@@ -129,10 +129,12 @@ def preprocess_image(image_array: np.ndarray) -> np.ndarray:
         image_array: Raw input image
 
     Returns:
-        Fully preprocessed image
+        Fully preprocessed image, or None if processing fails
     """
     # Load and validate
     image = load_image(image_array)
+    if image is None:
+        return None
 
     # Apply preprocessing pipeline
     processed = preprocess_for_mediapipe(image)

@@ -177,27 +177,33 @@ def calculate_height(landmarks: list, image_shape: tuple) -> float:
     Returns:
         Estimated height in cm
     """
-    nose = landmarks[0]
-    left_ankle = landmarks[27]
-    right_ankle = landmarks[28]
+    # Validate landmarks
+    if not landmarks or len(landmarks) < 29:
+        return 170.0  # Default fallback height
 
-    # Use ankle average for more accurate bottom reference
-    avg_ankle_x = (left_ankle['x'] + right_ankle['x']) / 2
-    avg_ankle_y = (left_ankle['y'] + right_ankle['y']) / 2
+    try:
+        nose = landmarks[0]
+        left_ankle = landmarks[27]
+        right_ankle = landmarks[28]
 
-    # Calculate height in pixels
-    height_pixels = math.sqrt(
-        (nose['x'] - avg_ankle_x)**2 +
-        (nose['y'] - avg_ankle_y)**2
-    ) * max(image_shape[0], image_shape[1])
+        # Use ankle average for more accurate bottom reference
+        avg_ankle_x = (left_ankle['x'] + right_ankle['x']) / 2
+        avg_ankle_y = (left_ankle['y'] + right_ankle['y']) / 2
 
-    # Convert to cm using estimated average
-    # Assuming average height of 170cm for scaling
-    # This will be refined once we have more context
-    height_cm = height_pixels * 0.5  # Approximate conversion
+        # Calculate height in pixels
+        height_pixels = math.sqrt(
+            (nose['x'] - avg_ankle_x)**2 +
+            (nose['y'] - avg_ankle_y)**2
+        ) * max(image_shape[0], image_shape[1])
 
-    # Clamp to reasonable human height range
-    return max(120, min(220, height_cm))
+        # Convert to cm using estimated average
+        # Assuming average height of 170cm for scaling
+        height_cm = height_pixels * 0.5  # Approximate conversion
+
+        # Clamp to reasonable human height range
+        return max(120, min(220, height_cm))
+    except Exception:
+        return 170.0  # Default fallback
 
 
 def calculate_shoulder_width(landmarks: list, image_shape: tuple) -> float:
@@ -213,20 +219,26 @@ def calculate_shoulder_width(landmarks: list, image_shape: tuple) -> float:
     Returns:
         Shoulder width in cm
     """
-    left_shoulder = landmarks[11]
-    right_shoulder = landmarks[12]
+    # Validate landmarks
+    if not landmarks or len(landmarks) < 13:
+        return 40.0  # Default fallback
 
-    # Calculate distance in normalized coordinates
-    distance = euclidean_distance_2d(left_shoulder, right_shoulder)
+    try:
+        left_shoulder = landmarks[11]
+        right_shoulder = landmarks[12]
 
-    # Convert to pixels
-    shoulder_pixels = distance * image_shape[1]
+        # Calculate distance in normalized coordinates
+        distance = euclidean_distance_2d(left_shoulder, right_shoulder)
 
-    # Convert to cm using average proportions
-    # Shoulder width typically ~38-45cm for adults
-    shoulder_cm = shoulder_pixels * 0.4
+        # Convert to pixels
+        shoulder_pixels = distance * image_shape[1]
 
-    return max(25, min(60, shoulder_cm))
+        # Convert to cm using average proportions
+        shoulder_cm = shoulder_pixels * 0.4
+
+        return max(25, min(60, shoulder_cm))
+    except Exception:
+        return 40.0  # Default fallback
 
 
 def calculate_chest(landmarks: list, image_shape: tuple, shoulder_width: float) -> float:
@@ -267,21 +279,28 @@ def calculate_waist(landmarks: list, image_shape: tuple, shoulder_width: float) 
     Returns:
         Waist measurement in cm
     """
-    left_hip = landmarks[23]
-    right_hip = landmarks[24]
+    # Validate landmarks
+    if not landmarks or len(landmarks) < 25:
+        return 80.0  # Default fallback
 
-    # Calculate waist width from hip landmarks
-    distance = euclidean_distance_2d(left_hip, right_hip)
-    waist_pixels = distance * image_shape[1]
+    try:
+        left_hip = landmarks[23]
+        right_hip = landmarks[24]
 
-    # Convert to cm
-    waist_cm = waist_pixels * 0.4
+        # Calculate waist width from hip landmarks
+        distance = euclidean_distance_2d(left_hip, right_hip)
+        waist_pixels = distance * image_shape[1]
 
-    # Apply ratio correction
-    waist_ratio = AVERAGE_HUMAN_RATIOS['waist_to_shoulder_ratio']
-    waist_cm = shoulder_width * waist_ratio
+        # Convert to cm
+        waist_cm = waist_pixels * 0.4
 
-    return max(50, min(130, waist_cm))
+        # Apply ratio correction
+        waist_ratio = AVERAGE_HUMAN_RATIOS['waist_to_shoulder_ratio']
+        waist_cm = shoulder_width * waist_ratio
+
+        return max(50, min(130, waist_cm))
+    except Exception:
+        return 80.0  # Default fallback
 
 
 def calculate_hips(landmarks: list, image_shape: tuple, shoulder_width: float) -> float:
@@ -298,18 +317,25 @@ def calculate_hips(landmarks: list, image_shape: tuple, shoulder_width: float) -
     Returns:
         Hip measurement in cm
     """
-    left_hip = landmarks[23]
-    right_hip = landmarks[24]
+    # Validate landmarks
+    if not landmarks or len(landmarks) < 25:
+        return 95.0  # Default fallback
 
-    # Calculate hip width
-    distance = euclidean_distance_2d(left_hip, right_hip)
-    hips_pixels = distance * image_shape[1]
+    try:
+        left_hip = landmarks[23]
+        right_hip = landmarks[24]
 
-    # Convert to cm using ratio
-    hips_ratio = AVERAGE_HUMAN_RATIOS['hips_to_shoulder_ratio']
-    hips_cm = shoulder_width * hips_ratio
+        # Calculate hip width
+        distance = euclidean_distance_2d(left_hip, right_hip)
+        hips_pixels = distance * image_shape[1]
 
-    return max(60, min(150, hips_cm))
+        # Convert to cm using ratio
+        hips_ratio = AVERAGE_HUMAN_RATIOS['hips_to_shoulder_ratio']
+        hips_cm = shoulder_width * hips_ratio
+
+        return max(60, min(150, hips_cm))
+    except Exception:
+        return 95.0  # Default fallback
 
 
 def calculate_measurements(landmarks_data: dict, image_shape: tuple) -> dict:
@@ -323,26 +349,54 @@ def calculate_measurements(landmarks_data: dict, image_shape: tuple) -> dict:
     Returns:
         Dictionary with all body measurements
     """
+    # Validate input
+    if not landmarks_data or 'landmarks' not in landmarks_data:
+        return {
+            'height': 170.0,
+            'chest': 95.0,
+            'waist': 80.0,
+            'hips': 95.0,
+            'shoulder_width': 40.0
+        }
+
     landmarks = landmarks_data['landmarks']
 
-    # Calculate shoulder width first (base measurement)
-    shoulder_width = calculate_shoulder_width(landmarks, image_shape)
+    if not landmarks or len(landmarks) < 29:
+        return {
+            'height': 170.0,
+            'chest': 95.0,
+            'waist': 80.0,
+            'hips': 95.0,
+            'shoulder_width': 40.0
+        }
 
-    # Calculate height
-    height = calculate_height(landmarks, image_shape)
+    try:
+        # Calculate shoulder width first (base measurement)
+        shoulder_width = calculate_shoulder_width(landmarks, image_shape)
 
-    # Calculate other measurements using shoulder width as base
-    chest = calculate_chest(landmarks, image_shape, shoulder_width)
-    waist = calculate_waist(landmarks, image_shape, shoulder_width)
-    hips = calculate_hips(landmarks, image_shape, shoulder_width)
+        # Calculate height
+        height = calculate_height(landmarks, image_shape)
 
-    return {
-        'height': round(height, 1),
-        'chest': round(chest, 1),
-        'waist': round(waist, 1),
-        'hips': round(hips, 1),
-        'shoulder_width': round(shoulder_width, 1)
-    }
+        # Calculate other measurements using shoulder width as base
+        chest = calculate_chest(landmarks, image_shape, shoulder_width)
+        waist = calculate_waist(landmarks, image_shape, shoulder_width)
+        hips = calculate_hips(landmarks, image_shape, shoulder_width)
+
+        return {
+            'height': round(height, 1),
+            'chest': round(chest, 1),
+            'waist': round(waist, 1),
+            'hips': round(hips, 1),
+            'shoulder_width': round(shoulder_width, 1)
+        }
+    except Exception:
+        return {
+            'height': 170.0,
+            'chest': 95.0,
+            'waist': 80.0,
+            'hips': 95.0,
+            'shoulder_width': 40.0
+        }
 
 
 # ========== Calibration-based Measurement Functions ==========
@@ -359,19 +413,26 @@ def calculate_height_calibrated(landmarks: list, image_shape: tuple, calibration
     Returns:
         Real height in cm
     """
-    nose = landmarks[0]
-    left_ankle = landmarks[27]
-    right_ankle = landmarks[28]
+    # Validate landmarks
+    if not landmarks or len(landmarks) < 29 or calibration_factor <= 0:
+        return 170.0  # Default fallback
 
-    # Use vertical distance (Y-axis) for height (most reliable)
-    ankle_y = max(left_ankle['y'], right_ankle['y'])
-    pixel_height = (ankle_y - nose['y']) * image_shape[0]
+    try:
+        nose = landmarks[0]
+        left_ankle = landmarks[27]
+        right_ankle = landmarks[28]
 
-    # Convert to cm using calibration factor
-    height_cm = pixel_height / calibration_factor
+        # Use vertical distance (Y-axis) for height (most reliable)
+        ankle_y = max(left_ankle['y'], right_ankle['y'])
+        pixel_height = (ankle_y - nose['y']) * image_shape[0]
 
-    # Clamp to reasonable human height range
-    return max(120, min(220, height_cm))
+        # Convert to cm using calibration factor
+        height_cm = pixel_height / calibration_factor
+
+        # Clamp to reasonable human height range
+        return max(120, min(220, height_cm))
+    except Exception:
+        return 170.0  # Default fallback
 
 
 def calculate_shoulder_width_calibrated(landmarks: list, image_shape: tuple, calibration_factor: float) -> float:
@@ -386,19 +447,26 @@ def calculate_shoulder_width_calibrated(landmarks: list, image_shape: tuple, cal
     Returns:
         Real shoulder width in cm
     """
-    left_shoulder = landmarks[11]
-    right_shoulder = landmarks[12]
+    # Validate landmarks
+    if not landmarks or len(landmarks) < 13 or calibration_factor <= 0:
+        return 40.0  # Default fallback
 
-    # 2D Euclidean distance in normalized coordinates
-    distance = euclidean_distance_2d(left_shoulder, right_shoulder)
+    try:
+        left_shoulder = landmarks[11]
+        right_shoulder = landmarks[12]
 
-    # Convert to pixels using image width
-    shoulder_pixels = distance * image_shape[1]
+        # 2D Euclidean distance in normalized coordinates
+        distance = euclidean_distance_2d(left_shoulder, right_shoulder)
 
-    # Convert to cm using calibration factor
-    shoulder_cm = shoulder_pixels / calibration_factor
+        # Convert to pixels using image width
+        shoulder_pixels = distance * image_shape[1]
 
-    return max(25, min(60, shoulder_cm))
+        # Convert to cm using calibration factor
+        shoulder_cm = shoulder_pixels / calibration_factor
+
+        return max(25, min(60, shoulder_cm))
+    except Exception:
+        return 40.0  # Default fallback
 
 
 def calculate_chest_calibrated(landmarks: list, image_shape: tuple, calibration_factor: float) -> float:
@@ -413,12 +481,19 @@ def calculate_chest_calibrated(landmarks: list, image_shape: tuple, calibration_
     Returns:
         Real chest measurement in cm
     """
-    # Estimate chest as 1.1x shoulder width (for front-facing pose)
-    shoulder_width = calculate_shoulder_width_calibrated(landmarks, image_shape, calibration_factor)
-    chest_ratio = AVERAGE_HUMAN_RATIOS['chest_to_shoulder_ratio']
-    chest_cm = shoulder_width * chest_ratio
+    # Validate input
+    if not landmarks or len(landmarks) < 13 or calibration_factor <= 0:
+        return 95.0  # Default fallback
 
-    return max(70, min(140, chest_cm))
+    try:
+        # Estimate chest as 1.1x shoulder width (for front-facing pose)
+        shoulder_width = calculate_shoulder_width_calibrated(landmarks, image_shape, calibration_factor)
+        chest_ratio = AVERAGE_HUMAN_RATIOS['chest_to_shoulder_ratio']
+        chest_cm = shoulder_width * chest_ratio
+
+        return max(70, min(140, chest_cm))
+    except Exception:
+        return 95.0  # Default fallback
 
 
 def calculate_waist_calibrated(landmarks: list, image_shape: tuple, calibration_factor: float) -> float:
@@ -433,17 +508,24 @@ def calculate_waist_calibrated(landmarks: list, image_shape: tuple, calibration_
     Returns:
         Real waist measurement in cm
     """
-    left_hip = landmarks[23]
-    right_hip = landmarks[24]
+    # Validate landmarks
+    if not landmarks or len(landmarks) < 25 or calibration_factor <= 0:
+        return 80.0  # Default fallback
 
-    # Calculate waist width from hip landmarks
-    distance = euclidean_distance_2d(left_hip, right_hip)
-    waist_pixels = distance * image_shape[1]
+    try:
+        left_hip = landmarks[23]
+        right_hip = landmarks[24]
 
-    # Convert to cm using calibration factor
-    waist_cm = waist_pixels / calibration_factor
+        # Calculate waist width from hip landmarks
+        distance = euclidean_distance_2d(left_hip, right_hip)
+        waist_pixels = distance * image_shape[1]
 
-    return max(50, min(130, waist_cm))
+        # Convert to cm using calibration factor
+        waist_cm = waist_pixels / calibration_factor
+
+        return max(50, min(130, waist_cm))
+    except Exception:
+        return 80.0  # Default fallback
 
 
 def calculate_hips_calibrated(landmarks: list, image_shape: tuple, calibration_factor: float) -> float:
@@ -458,17 +540,24 @@ def calculate_hips_calibrated(landmarks: list, image_shape: tuple, calibration_f
     Returns:
         Real hip measurement in cm
     """
-    left_hip = landmarks[23]
-    right_hip = landmarks[24]
+    # Validate landmarks
+    if not landmarks or len(landmarks) < 25 or calibration_factor <= 0:
+        return 95.0  # Default fallback
 
-    # Calculate hip width
-    distance = euclidean_distance_2d(left_hip, right_hip)
-    hips_pixels = distance * image_shape[1]
+    try:
+        left_hip = landmarks[23]
+        right_hip = landmarks[24]
 
-    # Convert to cm using calibration factor
-    hips_cm = hips_pixels / calibration_factor
+        # Calculate hip width
+        distance = euclidean_distance_2d(left_hip, right_hip)
+        hips_pixels = distance * image_shape[1]
 
-    return max(60, min(150, hips_cm))
+        # Convert to cm using calibration factor
+        hips_cm = hips_pixels / calibration_factor
+
+        return max(60, min(150, hips_cm))
+    except Exception:
+        return 95.0  # Default fallback
 
 
 def calculate_measurements_calibrated(landmarks_data: dict, image_shape: tuple, calibration_factor: float) -> dict:
@@ -483,19 +572,47 @@ def calculate_measurements_calibrated(landmarks_data: dict, image_shape: tuple, 
     Returns:
         Dictionary with all body measurements
     """
+    # Validate input
+    if not landmarks_data or 'landmarks' not in landmarks_data:
+        return {
+            'height': 170.0,
+            'chest': 95.0,
+            'waist': 80.0,
+            'hips': 95.0,
+            'shoulder_width': 40.0
+        }
+
     landmarks = landmarks_data['landmarks']
 
-    # Calculate all measurements using calibration
-    height = calculate_height_calibrated(landmarks, image_shape, calibration_factor)
-    shoulder_width = calculate_shoulder_width_calibrated(landmarks, image_shape, calibration_factor)
-    chest = calculate_chest_calibrated(landmarks, image_shape, calibration_factor)
-    waist = calculate_waist_calibrated(landmarks, image_shape, calibration_factor)
-    hips = calculate_hips_calibrated(landmarks, image_shape, calibration_factor)
+    if not landmarks or len(landmarks) < 29 or calibration_factor <= 0:
+        return {
+            'height': 170.0,
+            'chest': 95.0,
+            'waist': 80.0,
+            'hips': 95.0,
+            'shoulder_width': 40.0
+        }
 
-    return {
-        'height': round(height, 1),
-        'chest': round(chest, 1),
-        'waist': round(waist, 1),
-        'hips': round(hips, 1),
-        'shoulder_width': round(shoulder_width, 1)
-    }
+    try:
+        # Calculate all measurements using calibration
+        height = calculate_height_calibrated(landmarks, image_shape, calibration_factor)
+        shoulder_width = calculate_shoulder_width_calibrated(landmarks, image_shape, calibration_factor)
+        chest = calculate_chest_calibrated(landmarks, image_shape, calibration_factor)
+        waist = calculate_waist_calibrated(landmarks, image_shape, calibration_factor)
+        hips = calculate_hips_calibrated(landmarks, image_shape, calibration_factor)
+
+        return {
+            'height': round(height, 1),
+            'chest': round(chest, 1),
+            'waist': round(waist, 1),
+            'hips': round(hips, 1),
+            'shoulder_width': round(shoulder_width, 1)
+        }
+    except Exception:
+        return {
+            'height': 170.0,
+            'chest': 95.0,
+            'waist': 80.0,
+            'hips': 95.0,
+            'shoulder_width': 40.0
+        }

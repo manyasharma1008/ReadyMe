@@ -2,6 +2,7 @@ import { useEffect, useState } from "react"
 import { useNavigate } from "react-router-dom"
 import { useApp } from "../context/AppContext"
 import { useSizePrediction } from "../hooks"
+import { saveProfile } from "../api"
 import LoadingSpinner from "../components/common/LoadingSpinner"
 import ErrorMessage from "../components/common/ErrorMessage"
 
@@ -19,14 +20,31 @@ function SizeResult() {
     hips: '',
     shoulder_width: ''
   })
+  const [profileSaving, setProfileSaving] = useState(false)
+  const [profileSaved, setProfileSaved] = useState(false)
 
   // Predict size when measurements are available
   useEffect(() => {
+    console.log("SizeResult - measurements:", measurements)
+    console.log("SizeResult - preferences:", preferences)
+
     if (measurements && !recommendations) {
-      predict(measurements, {
-        category: preferences.category,
-        gender: preferences.gender,
-      })
+      // Validate measurements have valid numeric values
+      const m = measurements
+      const hasValidMeasurements = (
+        m && typeof m.height === 'number' && m.height > 0 &&
+        typeof m.chest === 'number' && m.chest > 0
+      )
+
+      if (hasValidMeasurements) {
+        console.log("Calling predict with:", measurements)
+        predict(measurements, {
+          category: preferences.category || 'shirts',
+          gender: preferences.gender || 'men',
+        })
+      } else {
+        console.warn("Invalid measurements - not calling predict:", measurements)
+      }
     }
   }, [measurements, recommendations, predict, preferences])
 
@@ -73,6 +91,23 @@ function SizeResult() {
   const handleScanAgain = () => {
     clearMeasurements()
     navigate("/camera")
+  }
+
+  // Save measurements to profile
+  const handleSaveToProfile = async () => {
+    if (!measurements) return
+
+    setProfileSaving(true)
+    try {
+      // Use a simple localStorage user ID for now (in production, would use auth)
+      const userId = localStorage.getItem('user_id') || 'anonymous'
+      await saveProfile(userId, measurements, 'My Profile')
+      setProfileSaved(true)
+    } catch (err) {
+      console.error("Failed to save profile:", err)
+    } finally {
+      setProfileSaving(false)
+    }
   }
 
   // If no measurements and not in manual mode, show manual input form
@@ -226,6 +261,13 @@ function SizeResult() {
             className="px-6 py-2 border border-clay text-clay rounded-lg hover:bg-clay hover:text-white transition-colors"
           >
             Scan Again
+          </button>
+          <button
+            onClick={handleSaveToProfile}
+            disabled={profileSaving || profileSaved || !measurements}
+            className="px-6 py-2 border border-green-500 text-green-600 rounded-lg hover:bg-green-500 hover:text-white transition-colors disabled:opacity-50"
+          >
+            {profileSaved ? "Saved!" : profileSaving ? "Saving..." : "Save to Profile"}
           </button>
           <button
             onClick={() => navigate("/preview")}

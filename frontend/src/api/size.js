@@ -28,12 +28,27 @@ export async function predictSize(measurements, options = {}) {
     gender = 'men'
   } = options
 
+  // Validate measurements - ensure no null/undefined values
+  const validMeasurements = {
+    height: Number(measurements.height) || 0,
+    chest: Number(measurements.chest) || 0,
+    waist: Number(measurements.waist) || 0,
+    hips: Number(measurements.hips) || 0,
+    shoulder_width: Number(measurements.shoulder_width) || 0
+  }
+
+  console.log("Predict payload - measurements:", validMeasurements)
+  console.log("Predict payload - options:", { category, gender, sizeChart, useStandardChart })
+
+  // Only include category/gender if not using a custom size chart
   const requestBody = {
-    measurements,
+    measurements: validMeasurements,
     size_chart: sizeChart,
     use_standard_chart: useStandardChart,
     ...(sizeChart ? {} : { category, gender })
   }
+
+  console.log("Predict request body:", JSON.stringify(requestBody))
 
   return apiPost(ENDPOINTS.SIZE_PREDICT, requestBody)
 }

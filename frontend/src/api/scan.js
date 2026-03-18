@@ -52,6 +52,38 @@ export async function scanImage(source) {
 }
 
 /**
+ * Scan image with calibration (using user's known height)
+ * This provides more accurate measurements
+ */
+export async function scanMeasureCalibrated(base64String, userHeightCm) {
+  const base64 = base64String.includes(",") ? base64String.split(",")[1] : base64String;
+  return apiPost(ENDPOINTS.SCAN_MEASURE_CALIBRATED, {
+    image_data: base64,
+    user_height_cm: userHeightCm,
+  });
+}
+
+/**
+ * Generate visualization of body landmarks
+ */
+export async function visualizeLandmarks(base64String, userHeightCm = null, showOutline = true, showInfo = true) {
+  const base64 = base64String.includes(",") ? base64String.split(",")[1] : base64String;
+  return apiPost(ENDPOINTS.SCAN_VISUALIZE, {
+    image_data: base64,
+    user_height_cm: userHeightCm,
+    show_outline: showOutline,
+    show_info: showInfo,
+  });
+}
+
+/**
+ * Get calibration status
+ */
+export async function getCalibrationStatus() {
+  return apiPost(ENDPOINTS.SCAN_CALIBRATE_STATUS, {});
+}
+
+/**
  * Validate image file type
  */
 export function isValidImageFile(file) {
