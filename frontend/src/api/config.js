@@ -32,6 +32,7 @@ export const ENDPOINTS = {
   // Calibrated measurement endpoints (new)
   SCAN_CALIBRATE: '/scan/calibrate',
   SCAN_MEASURE_CALIBRATED: '/scan/measure-calibrated',
+  SCAN_MEASURE_MULTIPLE: '/scan/measure-multiple',
   SCAN_VISUALIZE: '/scan/visualize',
   SCAN_CALIBRATE_STATUS: '/scan/calibrate/status',
 
