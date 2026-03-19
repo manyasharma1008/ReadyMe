@@ -22,6 +22,7 @@ export {
   scanMeasureImage,
   scanMeasureBase64,
   scanMeasureCalibrated,
+  scanMeasureMultiple,
   visualizeLandmarks,
   getCalibrationStatus,
   fileToBase64,

@@ -503,3 +503,130 @@ async def visualize_landmarks(payload: dict):
             "image_data": None,
             "calibration_factor": None
         }
+
+
+# ========== Measure Multiple Endpoint ==========
+
+class MeasureMultipleRequest(BaseModel):
+    """Request model for measuring multiple images at once."""
+    images: dict = Field(..., description="Dictionary with keys: front, back, left, right")
+    user_height_cm: float | None = Field(None, description="User's known height in cm for calibration")
+
+
+class ImageResult(BaseModel):
+    """Result for a single image."""
+    image_type: str
+    image_data: str = Field(..., description="Base64 encoded image")
+    landmarks: list = Field(default_factory=list, description="Detected body landmarks")
+    success: bool = True
+    message: str = ""
+
+
+class MeasureMultipleResponse(BaseModel):
+    """Response model for measure-multiple endpoint."""
+    success: bool
+    measurements: BodyMeasurements | None = None
+    images: list[ImageResult] = Field(default_factory=list)
+    message: str
+
+
+@router.post("/measure-multiple", response_model=MeasureMultipleResponse)
+async def measure_multiple_images(payload: MeasureMultipleRequest):
+    """
+    Analyze multiple body images (front, back, left, right) at once.
+    Returns landmarks for each image and combined measurements.
+    """
+    try:
+        image_types = ['front', 'back', 'left', 'right']
+        all_landmarks = {}
+        all_measurements = {}
+        image_results = []
+
+        for img_type in image_types:
+            image_data = payload.images.get(img_type)
+
+            if not image_data:
+                image_results.append(ImageResult(
+                    image_type=img_type,
+                    image_data="",
+                    landmarks=[],
+                    success=False,
+                    message="No image provided"
+                ))
+                continue
+
+            # Decode base64 image
+            image_array = _safe_decode_image(image_data)
+
+            if image_array is None:
+                image_results.append(ImageResult(
+                    image_type=img_type,
+                    image_data=image_data,
+                    landmarks=[],
+                    success=False,
+                    message="Invalid base64 image data"
+                ))
+                continue
+
+            # Extract landmarks
+            landmarks_data = _safe_extract_landmarks(image_array)
+            landmarks = landmarks_data.get('landmarks', [])
+
+            if not landmarks:
+                image_results.append(ImageResult(
+                    image_type=img_type,
+                    image_data=image_data,
+                    landmarks=[],
+                    success=False,
+                    message="Could not detect body in image"
+                ))
+                continue
+
+            # Calculate measurements for this image
+            measurements = calculate_measurements(landmarks, image_array.shape)
+
+            # Store for aggregation
+            all_landmarks[img_type] = landmarks
+            all_measurements[img_type] = measurements
+
+            image_results.append(ImageResult(
+                image_type=img_type,
+                image_data=image_data,
+                landmarks=landmarks,
+                success=True,
+                message="Processed successfully"
+            ))
+
+        # Calculate combined measurements (use front image as primary)
+        combined_measurements = all_measurements.get('front', {
+            'height': 0,
+            'chest': 0,
+            'waist': 0,
+            'hips': 0,
+            'shoulder_width': 0
+        })
+
+        # If we have valid front measurements, return them
+        if combined_measurements.get('height', 0) > 0:
+            return MeasureMultipleResponse(
+                success=True,
+                measurements=BodyMeasurements(**combined_measurements),
+                images=image_results,
+                message="All images processed successfully"
+            )
+        else:
+            return MeasureMultipleResponse(
+                success=False,
+                measurements=None,
+                images=image_results,
+                message="Could not extract valid measurements from images"
+            )
+
+    except Exception as e:
+        print(f"Measure-multiple endpoint error: {e}")
+        return MeasureMultipleResponse(
+            success=False,
+            measurements=None,
+            images=[],
+            message=f"Error processing images: {str(e)}"
+        )

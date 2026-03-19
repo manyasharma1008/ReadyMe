@@ -64,6 +64,25 @@ export async function scanMeasureCalibrated(base64String, userHeightCm) {
 }
 
 /**
+ * Scan multiple images (front, back, left, right) at once
+ * Returns array of images with their landmarks
+ */
+export async function scanMeasureMultiple(images, userHeightCm = null) {
+  // images should be an object with keys: front, back, left, right
+  const imagesData = {};
+  for (const [key, value] of Object.entries(images)) {
+    if (value) {
+      imagesData[key] = value.includes(",") ? value.split(",")[1] : value;
+    }
+  }
+
+  return apiPost(ENDPOINTS.SCAN_MEASURE_MULTIPLE, {
+    images: imagesData,
+    user_height_cm: userHeightCm,
+  });
+}
+
+/**
  * Generate visualization of body landmarks
  */
 export async function visualizeLandmarks(base64String, userHeightCm = null, showOutline = true, showInfo = true) {
