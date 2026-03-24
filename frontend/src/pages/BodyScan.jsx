@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from "react"
 import { useNavigate } from "react-router-dom"
 import { useScanImage } from "../hooks"
+import { useMediaPipe } from "../hooks/useMediaPipe"
 import { useApp } from "../context/AppContext"
 import { scanMeasureCalibrated, scanMeasureMultiple } from "../api"
 import LoadingSpinner from "../components/common/LoadingSpinner"
@@ -39,6 +40,15 @@ const LANDMARK_COLORS = {
   16: '#008080',     // Right wrist - Teal
 }
 
+// Mirror landmarks horizontally (x -> 1 - x) to compensate for mirrored video feed
+function mirrorLandmarks(landmarks) {
+  if (!landmarks || landmarks.length === 0) return landmarks
+  return landmarks.map(point => ({
+    ...point,
+    x: 1 - point.x
+  }))
+}
+
 function drawLandmarksOnCanvas(canvas, video, landmarks, width, height) {
   if (!canvas || !landmarks || landmarks.length === 0) return
 
@@ -57,10 +67,8 @@ function drawLandmarksOnCanvas(canvas, video, landmarks, width, height) {
     ctx.fillRect(0, 0, width, height)
   }
 
-  // Mirror the canvas to match the mirrored video
-  ctx.save()
-  ctx.scale(-1, 1)
-  ctx.translate(-width, 0)
+  // Use landmarks directly - CSS scale-x-[-1] on canvas handles mirroring
+  const mirroredLandmarks = landmarks
 
   // Draw connections (body outline)
   const connections = [
@@ -82,9 +90,9 @@ function drawLandmarksOnCanvas(canvas, video, landmarks, width, height) {
   ctx.lineWidth = 2
 
   connections.forEach(([startIdx, endIdx]) => {
-    if (startIdx < landmarks.length && endIdx < landmarks.length) {
-      const start = landmarks[startIdx]
-      const end = landmarks[endIdx]
+    if (startIdx < mirroredLandmarks.length && endIdx < mirroredLandmarks.length) {
+      const start = mirroredLandmarks[startIdx]
+      const end = mirroredLandmarks[endIdx]
       ctx.beginPath()
       ctx.moveTo(start.x * width, start.y * height)
       ctx.lineTo(end.x * width, end.y * height)
@@ -93,7 +101,7 @@ function drawLandmarksOnCanvas(canvas, video, landmarks, width, height) {
   })
 
   // Draw landmark points
-  landmarks.forEach((landmark, index) => {
+  mirroredLandmarks.forEach((landmark, index) => {
     const x = landmark.x * width
     const y = landmark.y * height
     const color = LANDMARK_COLORS[index] || '#ffffff'
@@ -110,8 +118,6 @@ function drawLandmarksOnCanvas(canvas, video, landmarks, width, height) {
     ctx.fillStyle = '#ffffff'
     ctx.fill()
   })
-
-  ctx.restore()
 }
 
 // Draw landmarks on a static image (not video)
@@ -131,10 +137,8 @@ function drawLandmarksOnStaticImage(canvas, imageSrc, landmarks, width, height) 
 
     if (!landmarks || landmarks.length === 0) return
 
-    // Mirror the canvas
-    ctx.save()
-    ctx.scale(-1, 1)
-    ctx.translate(-width, 0)
+    // Use landmarks directly - CSS scale-x-[-1] handles mirroring
+    const mirroredLandmarks = landmarks
 
     // Draw connections
     const connections = [
@@ -147,9 +151,9 @@ function drawLandmarksOnStaticImage(canvas, imageSrc, landmarks, width, height) 
     ctx.lineWidth = 2
 
     connections.forEach(([startIdx, endIdx]) => {
-      if (startIdx < landmarks.length && endIdx < landmarks.length) {
-        const start = landmarks[startIdx]
-        const end = landmarks[endIdx]
+      if (startIdx < mirroredLandmarks.length && endIdx < mirroredLandmarks.length) {
+        const start = mirroredLandmarks[startIdx]
+        const end = mirroredLandmarks[endIdx]
         ctx.beginPath()
         ctx.moveTo(start.x * width, start.y * height)
         ctx.lineTo(end.x * width, end.y * height)
@@ -158,7 +162,7 @@ function drawLandmarksOnStaticImage(canvas, imageSrc, landmarks, width, height) 
     })
 
     // Draw landmark points
-    landmarks.forEach((landmark, index) => {
+    mirroredLandmarks.forEach((landmark, index) => {
       const x = landmark.x * width
       const y = landmark.y * height
       const color = LANDMARK_COLORS[index] || '#ffffff'
@@ -173,8 +177,6 @@ function drawLandmarksOnStaticImage(canvas, imageSrc, landmarks, width, height) 
       ctx.fillStyle = '#ffffff'
       ctx.fill()
     })
-
-    ctx.restore()
   }
 }
 
@@ -204,8 +206,18 @@ function BodyScan() {
   const { setMeasurements } = useApp()
   const { scan, loading, error: scanError, clearError } = useScanImage()
 
+  // Real-time MediaPipe pose detection
+  const {
+    isLoaded: mediapipeLoaded,
+    isLoading: mediapipeLoading,
+    error: mediapipeError,
+    startDetection,
+    stopDetection,
+    clearLandmarks,
+  } = useMediaPipe()
+
   // Use local error state for scan errors
-  const displayError = localError || scanError
+  const displayError = localError || scanError || mediapipeError
 
   const instructions = [
     "Stand facing the camera (Front)",
@@ -213,6 +225,46 @@ function BodyScan() {
     "Turn to your right side",
     "Turn your back to the camera"
   ]
+
+  // Start real-time landmark detection when video is ready
+  useEffect(() => {
+    if (!mediapipeLoaded || !videoRef.current) return
+
+    const video = videoRef.current
+
+    // Wait for video to be ready, then start detection
+    const handleLoadedMetadata = () => {
+      // Start continuous detection
+      startDetection(video, (landmarks) => {
+        // Update current landmarks state for display
+        if (landmarks && landmarks.length > 0 && overlayCanvasRef.current) {
+          setCurrentLandmarks(landmarks)
+          // Draw in real-time mode (showLandmarks = true during preview)
+          if (showLandmarks) {
+            drawLandmarksOnCanvas(overlayCanvasRef.current, video, landmarks, video.videoWidth || 520, video.videoHeight || 300)
+          }
+        }
+      })
+    }
+
+    video.addEventListener('loadedmetadata', handleLoadedMetadata)
+
+    // If video already loaded
+    if (video.readyState >= 1) {
+      startDetection(video, (landmarks) => {
+        if (landmarks && landmarks.length > 0 && overlayCanvasRef.current) {
+          setCurrentLandmarks(landmarks)
+          // Always draw landmarks in real-time
+          drawLandmarksOnCanvas(overlayCanvasRef.current, video, landmarks, video.videoWidth || 520, video.videoHeight || 300)
+        }
+      })
+    }
+
+    return () => {
+      video.removeEventListener('loadedmetadata', handleLoadedMetadata)
+      stopDetection()
+    }
+  }, [mediapipeLoaded, startDetection, stopDetection])
 
   useEffect(() => {
     async function startCamera() {
@@ -243,21 +295,6 @@ function BodyScan() {
     }
 
   }, [])
-
-  // Draw raw landmarks when they update (fallback when visualization fails)
-  useEffect(() => {
-    // Only draw raw landmarks if we don't have a visualization image
-    // The visualization is drawn directly in the capture handler
-    if (showLandmarks && currentLandmarks && currentLandmarks.length > 0 && !visualizationImage && overlayCanvasRef.current && videoRef.current) {
-      const video = videoRef.current
-      const canvas = overlayCanvasRef.current
-
-      const width = video.videoWidth || 520
-      const height = video.videoHeight || 300
-
-      drawLandmarksOnCanvas(canvas, video, currentLandmarks, width, height)
-    }
-  }, [currentLandmarks, showLandmarks, visualizationImage])
 
   const stopCamera = () => {
     if (streamRef.current) {
@@ -308,9 +345,10 @@ function BodyScan() {
     clearError()
     setShowVisualization(false)
     setVisualizationImage(null)
-    setShowLandmarks(false)
-    setCurrentLandmarks(null)
     setMultiScanResults(null)
+
+    // Keep showing landmarks during scanning
+    setShowLandmarks(true)
 
     const imageData = captureFrame()
     if (!imageData) return
@@ -328,6 +366,8 @@ function BodyScan() {
     if (step < 4) {
       setStep(step + 1)
     } else {
+      // Stop real-time detection when done
+      stopDetection()
       stopCamera()
 
       // All 4 images captured - call measure-multiple
@@ -357,19 +397,39 @@ function BodyScan() {
           return
         }
 
-        // Handle the response
+        // Handle the response - support multiple response formats
         let scanSuccess = false
         let measurements = null
         let scanMessage = "Scan completed"
 
-        if (scanResponse.success !== undefined) {
-          scanSuccess = scanResponse.success === true
-          scanMessage = scanResponse.message || scanMessage
-          measurements = scanResponse.measurements
-        } else if (scanResponse.measurements) {
+        // Try to extract measurements from various response formats
+        const rawResponse = scanResponse
+        const dataWrapper = scanResponse.data
+
+        if (rawResponse.success !== undefined) {
+          scanSuccess = rawResponse.success === true
+          scanMessage = rawResponse.message || scanMessage
+          // Try multiple paths for measurements
+          measurements = rawResponse.measurements ?? rawResponse.data?.measurements
+        } else if (rawResponse.measurements) {
           scanSuccess = true
-          measurements = scanResponse.measurements
+          measurements = rawResponse.measurements
+        } else if (dataWrapper?.measurements) {
+          // Handle { data: { measurements: {...} } } format
+          scanSuccess = true
+          measurements = dataWrapper.measurements
+        } else if (dataWrapper?.images?.length > 0) {
+          // Handle multi-scan format: { data: { images: [...] } }
+          // Extract measurements from first image that has them
+          scanSuccess = true
+          const firstImageWithMeasurements = dataWrapper.images.find(img => img.measurements)
+          if (firstImageWithMeasurements?.measurements) {
+            measurements = firstImageWithMeasurements.measurements
+          }
         }
+
+        // Debug log
+        console.log("Extracted measurements:", measurements)
 
         if (!scanSuccess) {
           setLocalError(scanMessage || "Scan failed")
@@ -377,15 +437,30 @@ function BodyScan() {
         }
 
         if (!measurements) {
+          console.error("No measurements in response:", scanResponse)
           setLocalError("No measurements in response")
+          return
+        }
+
+        // Validate measurements have valid numeric values
+        const hasValidMeasurements = (
+          measurements &&
+          typeof measurements.height === 'number' && measurements.height > 0 &&
+          typeof measurements.chest === 'number' && measurements.chest > 0
+        )
+
+        if (!hasValidMeasurements) {
+          console.error("Invalid measurements:", measurements)
+          setLocalError("Invalid measurements returned")
           return
         }
 
         // Store measurements
         setMeasurements(measurements)
 
-        // Store the multi-scan results for display
-        setMultiScanResults(scanResponse)
+        // Store the multi-scan results for display (handle both wrapped and unwrapped formats)
+        const images = scanResponse.images ?? scanResponse.data?.images ?? []
+        setMultiScanResults({ ...scanResponse, images })
 
         // Navigate after 3.5 seconds
         setTimeout(() => {
@@ -411,6 +486,14 @@ function BodyScan() {
       <h1 className="text-3xl font-light text-charcoal-900">
         Body Scan
       </h1>
+
+      {/* Real-time detection status */}
+      {mediapipeLoaded && !mediapipeLoading && (
+        <div className="mt-2 flex items-center gap-2 text-xs text-green-600">
+          <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span>
+          Real-time pose detection active
+        </div>
+      )}
 
       {/* Subtitle */}
       <p className="mt-2 text-sm text-charcoal-700/70">
@@ -484,13 +567,21 @@ function BodyScan() {
             className="w-full h-full object-cover scale-x-[-1]"
           />
 
-          {/* Canvas overlay for landmarks - draws on top of video */}
+          {/* Canvas overlay for landmarks - always visible when MediaPipe is loaded */}
           <canvas
             ref={overlayCanvasRef}
-            className={`absolute inset-0 w-full h-full object-cover scale-x-[-1] ${showLandmarks ? 'opacity-100' : 'opacity-0'} transition-opacity duration-300`}
+            className={`absolute inset-0 w-full h-full object-cover scale-x-[-1] ${mediapipeLoaded && !mediapipeLoading ? 'opacity-100' : 'opacity-0'} transition-opacity duration-300`}
           />
 
-          {/* Loading overlay */}
+          {/* MediaPipe loading indicator */}
+          {mediapipeLoading && (
+            <div className="absolute inset-0 bg-black/50 flex flex-col items-center justify-center text-white">
+              <LoadingSpinner size="md" color="white" />
+              <p className="mt-2 text-sm">Loading pose detection...</p>
+            </div>
+          )}
+
+          {/* Loading overlay for backend processing */}
           {(loading || multiLoading) && (
             <div className="absolute inset-0 bg-black/50 flex flex-col items-center justify-center text-white">
               <LoadingSpinner size="lg" color="white" />
@@ -509,7 +600,7 @@ function BodyScan() {
       </div>
 
       {/* 2x2 Grid Display - Shows all 4 images with landmarks after scan completes */}
-      {multiScanResults && multiScanResults.images && (
+      {multiScanResults && multiScanResults.images && multiScanResults.images.length > 0 && (
         <div className="mt-8">
           <p className="text-lg font-medium text-gray-700 mb-4">Scan Results</p>
           <div className="grid grid-cols-2 gap-4">
@@ -533,9 +624,8 @@ function BodyScan() {
                         // Draw landmarks
                         const landmarks = imgData.landmarks
                         if (landmarks && landmarks.length > 0) {
-                          ctx.save()
-                          ctx.scale(-1, 1)
-                          ctx.translate(-width, 0)
+                          // Use landmarks directly - CSS scale-x-[-1] on canvas handles mirroring
+                          const mirroredLandmarks = landmarks
 
                           const connections = [
                             [11, 12], [23, 24], [11, 23], [12, 24],
@@ -547,9 +637,9 @@ function BodyScan() {
                           ctx.lineWidth = 2
 
                           connections.forEach(([startIdx, endIdx]) => {
-                            if (startIdx < landmarks.length && endIdx < landmarks.length) {
-                              const start = landmarks[startIdx]
-                              const end = landmarks[endIdx]
+                            if (startIdx < mirroredLandmarks.length && endIdx < mirroredLandmarks.length) {
+                              const start = mirroredLandmarks[startIdx]
+                              const end = mirroredLandmarks[endIdx]
                               ctx.beginPath()
                               ctx.moveTo(start.x * width, start.y * height)
                               ctx.lineTo(end.x * width, end.y * height)
@@ -557,7 +647,7 @@ function BodyScan() {
                             }
                           })
 
-                          landmarks.forEach((landmark, index) => {
+                          mirroredLandmarks.forEach((landmark, index) => {
                             const x = landmark.x * width
                             const y = landmark.y * height
                             const color = LANDMARK_COLORS[index] || '#ffffff'
@@ -572,8 +662,6 @@ function BodyScan() {
                             ctx.fillStyle = '#ffffff'
                             ctx.fill()
                           })
-
-                          ctx.restore()
                         }
                       }
                     }
