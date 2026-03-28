@@ -9,7 +9,7 @@ import ErrorMessage from "../components/common/ErrorMessage"
 function SizeResult() {
 
   const navigate = useNavigate()
-  const { measurements, preferences, clearMeasurements } = useApp()
+  const { measurements, preferences, clearMeasurements, confidenceScores, warnings, scanClassification } = useApp()
   const { recommendations, predict, loading, error, clearError } = useSizePrediction()
 
   const [manualInput, setManualInput] = useState(false)
@@ -143,6 +143,28 @@ function SizeResult() {
           {loading ? 'Analyzing...' : 'Your Recommended Size'}
         </h2>
 
+        {/* Scan Classification Banner */}
+        {scanClassification && (
+          <div className={`p-4 rounded-lg mb-4 ${
+            scanClassification.type === 'full_body' ? 'bg-green-50 border-green-200' :
+            scanClassification.type === 'upper_body' ? 'bg-yellow-50 border-yellow-200' :
+            'bg-red-50 border-red-200'
+          } border`}>
+            {scanClassification.type === 'full_body' && "Full Body Scan ✅"}
+            {scanClassification.type === 'upper_body' && "Upper Body Scan ⚠️ Limited Accuracy"}
+            {scanClassification.type === 'invalid' && "Invalid Scan ❌ Retake Required"}
+          </div>
+        )}
+
+        {/* Warnings Box */}
+        {warnings && warnings.length > 0 && (
+          <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-4">
+            {warnings.map((warning, idx) => (
+              <p key={idx} className="text-yellow-800 text-sm">⚠️ {warning}</p>
+            ))}
+          </div>
+        )}
+
         {/* Measurements Display */}
         <div className="bg-white rounded-lg shadow-lg p-6 mb-6">
           <h3 className="text-lg font-medium mb-4">Your Measurements</h3>
@@ -183,11 +205,11 @@ function SizeResult() {
             <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
               {measurements && (
                 <>
-                  <MeasurementCard label="Height" value={measurements.height} unit="cm" />
-                  <MeasurementCard label="Chest" value={measurements.chest} unit="cm" />
-                  <MeasurementCard label="Waist" value={measurements.waist} unit="cm" />
-                  <MeasurementCard label="Hips" value={measurements.hips} unit="cm" />
-                  <MeasurementCard label="Shoulder" value={measurements.shoulder_width} unit="cm" />
+                  <MeasurementCard label="Height" value={measurements.height} unit="cm" confidence={confidenceScores?.height} />
+                  <MeasurementCard label="Chest" value={measurements.chest} unit="cm" confidence={confidenceScores?.chest} />
+                  <MeasurementCard label="Waist" value={measurements.waist} unit="cm" confidence={confidenceScores?.waist} />
+                  <MeasurementCard label="Hips" value={measurements.hips} unit="cm" confidence={confidenceScores?.hips} />
+                  <MeasurementCard label="Shoulder" value={measurements.shoulder_width} unit="cm" confidence={confidenceScores?.shoulder_width} />
                 </>
               )}
             </div>
@@ -283,9 +305,20 @@ function SizeResult() {
 }
 
 /**
+ * Get confidence color based on score
+ */
+const getConfidenceColor = (score) => {
+  if (!score) return 'text-gray-400'
+  const pct = score * 100
+  if (pct > 85) return 'text-green-600'
+  if (pct >= 60) return 'text-yellow-600'
+  return 'text-red-600'
+}
+
+/**
  * Measurement display card
  */
-function MeasurementCard({ label, value, unit }) {
+function MeasurementCard({ label, value, unit, confidence }) {
   return (
     <div className="bg-gray-50 rounded-lg p-3">
       <p className="text-xs text-gray-500 uppercase tracking-wide">{label}</p>
@@ -293,6 +326,11 @@ function MeasurementCard({ label, value, unit }) {
         {value ? value.toFixed(1) : '--'}
         <span className="text-sm font-normal text-gray-500 ml-1">{unit}</span>
       </p>
+      {confidence !== undefined && (
+        <p className={`text-xs ${getConfidenceColor(confidence)}`}>
+          {Math.round(confidence * 100)}% confidence
+        </p>
+      )}
     </div>
   )
 }

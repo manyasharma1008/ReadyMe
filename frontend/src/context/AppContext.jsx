@@ -22,6 +22,10 @@ const initialState = {
   isLoading: false,
   // Error states
   error: null,
+  // Enhanced scan data
+  confidenceScores: null,
+  warnings: [],
+  scanClassification: null,
 }
 
 // Action types
@@ -36,6 +40,9 @@ const ActionTypes = {
   CLEAR_ERROR: 'CLEAR_ERROR',
   RESET_STATE: 'RESET_STATE',
   ADD_TO_HISTORY: 'ADD_TO_HISTORY',
+  SET_CONFIDENCE_SCORES: 'SET_CONFIDENCE_SCORES',
+  SET_WARNINGS: 'SET_WARNINGS',
+  SET_SCAN_CLASSIFICATION: 'SET_SCAN_CLASSIFICATION',
 }
 
 // Reducer
@@ -113,6 +120,24 @@ function appReducer(state, action) {
         ],
       }
 
+    case ActionTypes.SET_CONFIDENCE_SCORES:
+      return {
+        ...state,
+        confidenceScores: action.payload,
+      }
+
+    case ActionTypes.SET_WARNINGS:
+      return {
+        ...state,
+        warnings: action.payload,
+      }
+
+    case ActionTypes.SET_SCAN_CLASSIFICATION:
+      return {
+        ...state,
+        scanClassification: action.payload,
+      }
+
     default:
       return state
   }
@@ -166,6 +191,18 @@ export function AppProvider({ children }) {
     dispatch({ type: ActionTypes.ADD_TO_HISTORY, payload: scanData })
   }, [])
 
+  const setConfidenceScores = useCallback((scores) => {
+    dispatch({ type: ActionTypes.SET_CONFIDENCE_SCORES, payload: scores })
+  }, [])
+
+  const setWarnings = useCallback((warnings) => {
+    dispatch({ type: ActionTypes.SET_WARNINGS, payload: warnings })
+  }, [])
+
+  const setScanClassification = useCallback((classification) => {
+    dispatch({ type: ActionTypes.SET_SCAN_CLASSIFICATION, payload: classification })
+  }, [])
+
   // Computed values
   const hasMeasurements = state.measurements !== null
   const hasRecommendations = state.recommendations !== null
@@ -187,6 +224,9 @@ export function AppProvider({ children }) {
     clearError,
     resetState,
     addToHistory,
+    setConfidenceScores,
+    setWarnings,
+    setScanClassification,
   }
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>

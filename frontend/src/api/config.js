@@ -28,6 +28,7 @@ export const ENDPOINTS = {
   // Scan endpoints
   SCAN_MEASURE: '/scan/measure',
   SCAN_MEASURE_BASE64: '/scan/measure-base64',
+  SCAN_MEASURE_ENHANCED: '/scan/measure-enhanced',
 
   // Calibrated measurement endpoints (new)
   SCAN_CALIBRATE: '/scan/calibrate',
