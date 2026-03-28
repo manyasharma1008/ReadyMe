@@ -36,6 +36,14 @@ export async function scanMeasureBase64(base64String) {
 }
 
 /**
+ * Enhanced body measurement with validation, scan classification, and confidence scoring
+ */
+export async function scanMeasureEnhanced(base64String) {
+  const base64 = base64String.includes(",") ? base64String.split(",")[1] : base64String;
+  return apiPost(ENDPOINTS.SCAN_MEASURE_ENHANCED, { image_data: base64 });
+}
+
+/**
  * Scan image - auto-detects source type (File or base64 string)
  */
 export async function scanImage(source) {
@@ -66,6 +74,7 @@ export async function scanMeasureCalibrated(base64String, userHeightCm) {
 /**
  * Scan multiple images (front, back, left, right) at once
  * Returns array of images with their landmarks
+ * Uses extended timeout (120s) as processing 4 images takes longer
  */
 export async function scanMeasureMultiple(images, userHeightCm = null) {
   // images should be an object with keys: front, back, left, right
@@ -76,10 +85,13 @@ export async function scanMeasureMultiple(images, userHeightCm = null) {
     }
   }
 
+  // Use 120 second timeout for processing 4 images
+  const EXTENDED_TIMEOUT = 120000;
+
   return apiPost(ENDPOINTS.SCAN_MEASURE_MULTIPLE, {
     images: imagesData,
     user_height_cm: userHeightCm,
-  });
+  }, EXTENDED_TIMEOUT);
 }
 
 /**

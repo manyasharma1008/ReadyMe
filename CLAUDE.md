@@ -28,6 +28,36 @@ ReadyMe/
 └── extension/         # Plasmo browser extension
 ```
 
+Frontend structure:
+
+```
+frontend/
+├── src/
+│   ├── components/
+│   │   ├── Avatar.jsx
+│   │   ├── HumanModel.jsx
+│   │   ├── ThumbnailGallery.jsx
+│   │   ├── Navbar.jsx
+│   │   └── common/
+│   ├── hooks/
+│   │   ├── useApi.js
+│   │   ├── useMediaPipe.js      # NEW: Real-time pose detection
+│   │   ├── useScanImage.js
+│   │   └── useSizePrediction.js
+│   ├── pages/
+│   │   ├── BodyScan.jsx         # NEW: Real-time webcam + landmarks
+│   │   ├── Contact.jsx
+│   │   ├── Help.jsx
+│   │   └── ...
+│   ├── context/
+│   │   └── AppContext.jsx
+│   ├── api/
+│   │   └── scan.js
+│   └── App.jsx
+├── package.json
+└── vite.config.js
+```
+
 Backend structure:
 
 ```
@@ -44,7 +74,8 @@ backend/
 │   │   ├── preprocessing.py
 │   │   ├── measurement.py
 │   │   ├── chart_matcher.py
-│   │   └── fit_model.py
+│   │   ├── fit_model.py
+│   │   └── visualization.py      # NEW: Landmark visualization
 │   ├── models/
 │   │   ├── schemas.py
 │   │   └── weights/
@@ -68,6 +99,7 @@ backend/
 * MediaPipe
 * OpenCV
 * TensorFlow / Keras (optional)
+* NumPy
 
 ### Database
 
@@ -82,18 +114,18 @@ backend/
 * Vite 7
 * Tailwind CSS 4
 * Plasmo browser extension framework
+* @mediapipe/tasks-vision (for client-side pose detection)
 
 ---
 
-# Dev2 Progress Status
+# Completed Systems ✅
 
-## Completed Systems ✅
-
-### Body Measurement API
+## 1. Body Measurement API
 
 * FastAPI backend with routers
 * `/scan/measure`
 * `/scan/measure-base64`
+* `/scan/measure-multiple` (NEW: capture 4 angles)
 * MediaPipe body landmark extraction
 * OpenCV preprocessing
 * Measurement calculations
@@ -117,7 +149,7 @@ measurement.py
 
 ---
 
-### Calibration System
+## 2. Calibration System
 
 The system supports two calibration methods for accurate body measurements:
 
@@ -151,9 +183,11 @@ POST /scan/visualize                     # Generate landmark visualization
 
 ---
 
-### Visualization Service
+## 3. Visualization Service
 
-Live landmark overlay during body scanning. Draws:
+### Backend Service
+
+Live landmark overlay on captured images. Draws:
 
 * Colored dots at key body points (nose, shoulders, hips, ankles, knees, elbows, wrists)
 * Body outline connecting landmarks
@@ -167,9 +201,31 @@ Functions:
 - `draw_calibration_info()` - Show calibration status on image
 - `create_visualization()` - Full visualization pipeline
 
+### Frontend Real-Time Detection (NEW)
+
+Client-side pose detection using MediaPipe:
+
+File: `frontend/src/hooks/useMediaPipe.js`
+
+Features:
+- Real-time pose landmark detection from webcam
+- Returns landmarks as normalized coordinates (0-1)
+- Supports continuous detection mode
+- Uses WebAssembly for performance
+
+Usage:
+```javascript
+const { isLoaded, startDetection, stopDetection, landmarks } = useMediaPipe()
+
+// Start detection
+startDetection(videoElement, (landmarks) => {
+  // landmarks is array of {x, y, z, visibility}
+})
+```
+
 ---
 
-### Size Prediction Model
+## 4. Size Prediction Model
 
 Implemented in:
 
@@ -196,7 +252,7 @@ Endpoints:
 
 ---
 
-### Product Size Chart Extraction
+## 5. Product Size Chart Extraction
 
 Implemented in:
 
@@ -222,7 +278,7 @@ GET /product/supported-platforms
 
 ---
 
-### Supabase Database Integration
+## 6. Supabase Database Integration
 
 Supabase is used as the main database.
 
@@ -250,7 +306,7 @@ JWT_SECRET
 
 ---
 
-### Body Profile CRUD API
+## 7. Body Profile CRUD API
 
 Implemented in:
 
@@ -277,26 +333,51 @@ Authentication: JWT token validation via `get_current_user` dependency
 
 ---
 
-### Bug Fixes Applied
+## 8. Multi-Angle Body Scan (NEW)
 
-1. **Pydantic v2 Type Annotations** (app/routers/scan.py)
-   - Changed `float = None` to `float | None = None` for Optional fields
-   - Fixed in `CalibrationStatusResponse` and `VisualizationResponse`
+Frontend feature for capturing 4 angles:
 
-2. **Supabase Lazy Loading** (app/db/supabase.py)
-   - Client now created on-demand, not at import time
-   - Prevents startup failures when Supabase is unavailable
+```
+frontend/src/pages/BodyScan.jsx
+```
 
-3. **Live Landmark Display** (frontend/src/pages/BodyScan.jsx)
-   - Visualizes body landmarks in real-time during camera scan
-   - Shows colored markers on body points (nose, shoulders, hips, etc.)
-   - Overlay rendered on video feed for immediate feedback
+Features:
+* Step-by-step capture: Front → Left → Right → Back
+* Real-time webcam feed with pose landmarks overlay
+* User height input for calibration
+* Countdown timer before capture
+* Simultaneous backend processing of all 4 images
+
+Steps:
+1. Front facing camera
+2. Turn left side
+3. Turn right side
+4. Turn back to camera
 
 ---
 
-# Pending Features (Claude Code should implement)
+## 9. Frontend Real-Time Pose Detection (NEW)
 
-## Virtual Try-On Pipeline (Future)
+Client-side MediaPipe integration:
+
+File: `frontend/src/hooks/useMediaPipe.js`
+
+Features:
+- Real-time pose landmark detection during webcam preview
+- Visual overlay on video feed
+- Fixed mirroring issue (landmarks now stick to body correctly)
+
+Bug Fix Applied:
+- **Mirroring bug**: Landmarks moved opposite to user movement
+- **Root cause**: Double mirroring (CSS + coordinate flip)
+- **Fix**: Removed coordinate-level `1-x` flip, let CSS handle all visual mirroring
+- **File changed**: `frontend/src/pages/BodyScan.jsx`
+
+---
+
+# Pending Features (Future Work)
+
+## Virtual Try-On Pipeline
 
 To be implemented later.
 
@@ -329,39 +410,63 @@ http://localhost:8000/docs
 
 ---
 
+# Frontend Commands
+
+Run frontend:
+
+```
+cd frontend
+npm run dev
+```
+
+Build for production:
+
+```
+cd frontend
+npm run build
+```
+
+---
+
 # Development Rules for Claude Code
 
 When modifying this repository:
 
-1. Only modify **backend code for Dev2 tasks**
-2. Follow existing FastAPI router patterns
-3. Always access the database via:
+1. Follow existing FastAPI router patterns
+2. Always access the database via:
 
 ```
 app/db/supabase.py
 ```
 
-4. Never import the Supabase library directly in routers
-5. All `/profile` routes must use authentication
-6. Keep business logic inside `services/`
+3. Never import the Supabase library directly in routers
+4. All `/profile` routes must use authentication
+5. Keep business logic inside `services/`
+
+For frontend work:
+- Use existing React component patterns
+- Keep business logic in hooks
+- Follow Tailwind CSS 4 conventions
 
 ---
 
 # Important Notes
 
-* TensorFlow is optional
-* API should work even if TensorFlow is not installed
+* TensorFlow is optional - API should work even if not installed
 * MediaPipe must run in headless server environments
 * CORS is enabled for browser extension access
+* Frontend uses client-side MediaPipe for real-time preview, backend uses Python MediaPipe for final processing
 
 ---
 
 # Goal
 
-The backend should provide:
+The project provides:
 
-* body measurement extraction
+* body measurement extraction (frontend + backend)
 * clothing size prediction
 * product size chart extraction
 * user measurement storage
+* real-time pose landmark overlay
+* multi-angle body scanning
 * future virtual try-on support

@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom"
 import { useScanImage } from "../hooks"
 import { useMediaPipe } from "../hooks/useMediaPipe"
 import { useApp } from "../context/AppContext"
-import { scanMeasureCalibrated, scanMeasureMultiple } from "../api"
+import { scanMeasureEnhanced } from "../api"
 import LoadingSpinner from "../components/common/LoadingSpinner"
 import ErrorMessage from "../components/common/ErrorMessage"
 
@@ -203,7 +203,7 @@ function BodyScan() {
   const [countdownNumber, setCountdownNumber] = useState(3)
   const [localError, setLocalError] = useState(null)
 
-  const { setMeasurements } = useApp()
+  const { setMeasurements, setConfidenceScores, setWarnings, setScanClassification } = useApp()
   const { scan, loading, error: scanError, clearError } = useScanImage()
 
   // Real-time MediaPipe pose detection
@@ -384,83 +384,172 @@ function BodyScan() {
       setMultiLoading(true)
 
       try {
-        // Call measure-multiple API
-        const height = parseFloat(userHeight)
-        const scanResponse = await scanMeasureMultiple(imagesToSend, userHeight && height > 100 && height < 250 ? height : null)
+        // STEP 1: SAFE BASE64 NORMALIZATION
+        const normalizeToBase64 = async (img) => {
+          if (!img) return null;
+          if (typeof img === "string") {
+            return img.includes(",") ? img.split(",")[1] : img;
+          }
+          return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.readAsDataURL(img);
+            reader.onload = () => {
+              const result = reader.result;
+              const base64 = result.split(",")[1];
+              resolve(base64);
+            };
+            reader.onerror = reject;
+          });
+        };
+
+        // STEP 2: CONVERT ALL IMAGES
+        const base64Images = {
+          front: await normalizeToBase64(imagesToSend.front),
+          back: await normalizeToBase64(imagesToSend.back),
+          left: await normalizeToBase64(imagesToSend.left),
+          right: await normalizeToBase64(imagesToSend.right),
+        };
+
+        // Safety check
+        const base64Values = Object.values(base64Images).filter(Boolean);
+        if (base64Values.length === 0 || !base64Values.every(v => typeof v === "string")) {
+          setLocalError("Image conversion failed. Please try again.");
+          setMultiLoading(false);
+          return;
+        }
+
+        console.log("ENHANCED PIPELINE ACTIVE ✅");
+        console.log("Base64 Images prepared:", Object.keys(base64Images));
+
+        // STEP 3: CALL ENHANCED ENDPOINT (PARALLEL)
+        const heightVal = parseFloat(userHeight);
+        const heightParam =
+          userHeight && heightVal > 100 && heightVal < 250 ? heightVal : null;
+
+        const responses = await Promise.all([
+          base64Images.front
+            ? scanMeasureEnhanced(base64Images.front, heightParam)
+            : null,
+          base64Images.back
+            ? scanMeasureEnhanced(base64Images.back, heightParam)
+            : null,
+          base64Images.left
+            ? scanMeasureEnhanced(base64Images.left, heightParam)
+            : null,
+          base64Images.right
+            ? scanMeasureEnhanced(base64Images.right, heightParam)
+            : null,
+        ]);
+
+        // FIX 5: LOG EACH ANGLE (DEBUG GOLD)
+        responses.forEach((r, i) => {
+          console.log(`Response ${i}:`, r);
+        });
 
         setMultiLoading(false)
 
-        console.log("Measure multiple response:", scanResponse)
+        // STEP 4: SAFE RESPONSE FILTERING
+        const validResponses = responses.filter(
+          (r) => r && r.measurements && Object.keys(r.measurements).length > 0
+        );
 
-        if (!scanResponse) {
-          setLocalError("No response from scan API")
-          return
+        // FIX 2: HANDLE NO VALID RESPONSES
+        if (validResponses.length === 0) {
+          console.error("No valid scan responses ❌");
+
+          setScanClassification({ type: "invalid", confidence: 0 });
+          setWarnings(["Scan failed. Please ensure full body is visible and try again."]);
+          setConfidenceScores({});
+
+          return;
         }
 
-        // Handle the response - support multiple response formats
-        let scanSuccess = false
-        let measurements = null
-        let scanMessage = "Scan completed"
+        // STEP 5: COMBINE CLASSIFICATION
+        const scanTypes = validResponses.map(r => r.scan_type);
+        let finalScanType = "invalid";
+        if (scanTypes.includes("full_body")) {
+          finalScanType = "full_body";
+        } else if (scanTypes.includes("upper_body")) {
+          finalScanType = "upper_body";
+        }
 
-        // Try to extract measurements from various response formats
-        const rawResponse = scanResponse
-        const dataWrapper = scanResponse.data
+        // STEP 6: COMBINE WARNINGS (FIX 3: DEDUPLICATE)
+        const warnings = [
+          ...new Set(validResponses.flatMap(r => r.warnings || []))
+        ];
 
-        if (rawResponse.success !== undefined) {
-          scanSuccess = rawResponse.success === true
-          scanMessage = rawResponse.message || scanMessage
-          // Try multiple paths for measurements
-          measurements = rawResponse.measurements ?? rawResponse.data?.measurements
-        } else if (rawResponse.measurements) {
-          scanSuccess = true
-          measurements = rawResponse.measurements
-        } else if (dataWrapper?.measurements) {
-          // Handle { data: { measurements: {...} } } format
-          scanSuccess = true
-          measurements = dataWrapper.measurements
-        } else if (dataWrapper?.images?.length > 0) {
-          // Handle multi-scan format: { data: { images: [...] } }
-          // Extract measurements from first image that has them
-          scanSuccess = true
-          const firstImageWithMeasurements = dataWrapper.images.find(img => img.measurements)
-          if (firstImageWithMeasurements?.measurements) {
-            measurements = firstImageWithMeasurements.measurements
+        // STEP 7: COMBINE CONFIDENCE (FIX 4: SAFE AVERAGING)
+        const confidenceList = validResponses.map(r => r.confidence || {});
+        const combinedConfidence = {};
+
+        confidenceList.forEach(conf => {
+          Object.keys(conf).forEach(key => {
+            if (!combinedConfidence[key]) combinedConfidence[key] = [];
+            if (typeof conf[key] === "number") {
+              combinedConfidence[key].push(conf[key]);
+            }
+          });
+        });
+
+        Object.keys(combinedConfidence).forEach(key => {
+          const values = combinedConfidence[key];
+          if (values.length > 0) {
+            combinedConfidence[key] =
+              values.reduce((a, b) => a + b, 0) / values.length;
+          } else {
+            combinedConfidence[key] = 0;
           }
-        }
+        });
 
-        // Debug log
-        console.log("Extracted measurements:", measurements)
+        // STEP 8: COMBINE MEASUREMENTS (average all valid)
+        const measurementsList = validResponses.map(r => r.measurements);
+        const finalMeasurements = {
+          height: 0,
+          chest: 0,
+          waist: 0,
+          hips: 0,
+          shoulder_width: 0,
+        };
 
-        if (!scanSuccess) {
-          setLocalError(scanMessage || "Scan failed")
+        const measurementKeys = ["height", "chest", "waist", "hips", "shoulder_width"];
+        measurementKeys.forEach(key => {
+          const values = measurementsList
+            .map(m => m[key])
+            .filter(v => typeof v === "number" && v > 0);
+          if (values.length > 0) {
+            finalMeasurements[key] = values.reduce((a, b) => a + b, 0) / values.length;
+          }
+        });
+
+        // Debug logs
+        console.log("Final Type:", finalScanType);
+        console.log("Confidence:", combinedConfidence);
+        console.log("Warnings:", warnings);
+        console.log("Final Measurements:", finalMeasurements);
+
+        // STEP 9: SET STATE (FIX 6: BETTER CLASSIFICATION CONFIDENCE)
+        setScanClassification({
+          type: finalScanType,
+          confidence:
+            combinedConfidence.overall ||
+            Math.max(...Object.values(combinedConfidence), 0)
+        });
+
+        setWarnings(warnings);
+        setConfidenceScores(combinedConfidence);
+        setMeasurements(finalMeasurements);
+
+        // Handle invalid scans
+        if (finalScanType === 'invalid') {
+          setLocalError("Scan failed. Please ensure full body is visible and try again.")
           return
         }
 
-        if (!measurements) {
-          console.error("No measurements in response:", scanResponse)
-          setLocalError("No measurements in response")
-          return
-        }
-
-        // Validate measurements have valid numeric values
-        const hasValidMeasurements = (
-          measurements &&
-          typeof measurements.height === 'number' && measurements.height > 0 &&
-          typeof measurements.chest === 'number' && measurements.chest > 0
-        )
-
-        if (!hasValidMeasurements) {
-          console.error("Invalid measurements:", measurements)
+        // Validate final measurements
+        if (!finalMeasurements || finalMeasurements.height <= 0) {
           setLocalError("Invalid measurements returned")
           return
         }
-
-        // Store measurements
-        setMeasurements(measurements)
-
-        // Store the multi-scan results for display (handle both wrapped and unwrapped formats)
-        const images = scanResponse.images ?? scanResponse.data?.images ?? []
-        setMultiScanResults({ ...scanResponse, images })
 
         // Navigate after 3.5 seconds
         setTimeout(() => {
@@ -585,7 +674,7 @@ function BodyScan() {
           {(loading || multiLoading) && (
             <div className="absolute inset-0 bg-black/50 flex flex-col items-center justify-center text-white">
               <LoadingSpinner size="lg" color="white" />
-              <p className="mt-4">Analyzing your body...</p>
+              <p className="mt-4">Analyzing body posture...</p>
             </div>
           )}
 

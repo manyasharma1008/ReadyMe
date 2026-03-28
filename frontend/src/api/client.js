@@ -29,7 +29,7 @@ export class ApiError extends Error {
 }
 
 // Core API client with timeout and retry handling
-export async function apiClient(endpoint, options = {}, retryCount = 0) {
+export async function apiClient(endpoint, options = {}, retryCount = 0, customTimeout = null) {
   // Validate API_BASE_URL is configured
   if (!API_BASE_URL) {
     console.error('API_BASE_URL is not configured. Set VITE_API_BASE_URL environment variable.')
@@ -39,11 +39,12 @@ export async function apiClient(endpoint, options = {}, retryCount = 0) {
   const url = `${API_BASE_URL}${endpoint}`;
   console.log(`[API] ${new Date().toISOString()} - ${options.method || 'GET'} ${url}`);
 
+  const timeout = customTimeout || API_TIMEOUT;
   const controller = new AbortController();
   const timeoutId = setTimeout(() => {
-    console.warn(`[API] Request timeout after ${API_TIMEOUT}ms`);
+    console.warn(`[API] Request timeout after ${timeout}ms`);
     controller.abort();
-  }, API_TIMEOUT);
+  }, timeout);
 
   try {
     const response = await fetch(url, {
@@ -124,10 +125,12 @@ export function apiGet(endpoint) {
   });
 }
 
-// JSON POST request
-export function apiPost(endpoint, body) {
+// JSON POST request with optional custom timeout
+export function apiPost(endpoint, body, customTimeout = null) {
   // Debug: Log the payload being sent
   console.log(`[API POST] ${endpoint}`, JSON.stringify(body, null, 2));
+
+  const timeout = customTimeout || API_TIMEOUT;
 
   return apiClient(endpoint, {
     method: "POST",
@@ -135,7 +138,7 @@ export function apiPost(endpoint, body) {
       "Content-Type": "application/json",
     },
     body: JSON.stringify(body),
-  });
+  }, 0, timeout);
 }
 
 // FormData POST request (for file uploads)

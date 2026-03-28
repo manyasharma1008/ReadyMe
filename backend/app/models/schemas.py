@@ -25,6 +25,34 @@ class ScanMeasureResponse(BaseModel):
     landmarks: Optional[list] = Field(default_factory=list, description="Body landmarks for visualization")
 
 
+class MeasurementConfidence(BaseModel):
+    """Confidence scores for each measurement (0-1)."""
+    height: float = Field(0.0, description="Confidence for height measurement")
+    chest: float = Field(0.0, description="Confidence for chest measurement")
+    waist: float = Field(0.0, description="Confidence for waist measurement")
+    hips: float = Field(0.0, description="Confidence for hips measurement")
+    shoulder_width: float = Field(0.0, description="Confidence for shoulder width measurement")
+
+
+class ScanClassificationResult(BaseModel):
+    """Result of scan type classification."""
+    scan_type: str = Field(..., description="Scan type: full_body, upper_body, or invalid")
+    missing_landmarks: list[str] = Field(default_factory=list, description="List of missing landmark names")
+    visibility_scores: dict[str, float] = Field(default_factory=dict, description="Visibility scores for each landmark")
+
+
+class ScanMeasureResponseV2(BaseModel):
+    """Enhanced response model for body scan with validation and confidence."""
+    success: bool = Field(..., description="Whether the scan was successful")
+    scan_type: str = Field(..., description="Scan type: full_body, upper_body, or invalid")
+    measurements: Optional[BodyMeasurements] = Field(None, description="Extracted body measurements")
+    confidence: Optional[MeasurementConfidence] = Field(None, description="Confidence scores for each measurement")
+    warnings: list[str] = Field(default_factory=list, description="Warnings about scan quality")
+    missing_landmarks: list[str] = Field(default_factory=list, description="List of missing landmark names")
+    message: Optional[str] = Field(None, description="Optional message")
+    landmarks: Optional[list] = Field(default_factory=list, description="Body landmarks for visualization")
+
+
 class ProfileSaveRequest(BaseModel):
     """Request model for saving body profile."""
     user_id: str = Field(..., description="User ID")

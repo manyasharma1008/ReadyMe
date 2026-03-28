@@ -1,16 +1,18 @@
 import base64
 import io
 import cv2
+from typing import Optional
 from fastapi import APIRouter, UploadFile, File, HTTPException
 from PIL import Image
 import numpy as np
 from pydantic import BaseModel, Field
 
-from app.models.schemas import ScanMeasureResponse, BodyMeasurements
+from app.models.schemas import ScanMeasureResponse, BodyMeasurements, ScanMeasureResponseV2, MeasurementConfidence
 from app.services.preprocessing import preprocess_image
 from app.services.mediapipe_extractor import extract_body_landmarks
 from app.services.measurement import (
     calculate_measurements,
+    calculate_measurements_enhanced,
     calibrate_with_user_height,
     calibrate_with_reference,
     get_calibration_factor,
@@ -241,6 +243,85 @@ async def measure_body_base64(payload: MeasureBase64Request):
             success=False,
             measurements=None,
             message=f"Error processing image: {str(e)}",
+            landmarks=[]
+        )
+
+
+@router.post("/measure-enhanced", response_model=ScanMeasureResponseV2)
+async def measure_body_enhanced(payload: MeasureBase64Request):
+    """
+    Enhanced body measurement with validation, scan classification, and confidence scoring.
+
+    Returns detailed information about:
+    - Scan type (full_body, upper_body, invalid)
+    - Confidence scores for each measurement
+    - Warnings about scan quality
+    - Missing landmarks
+    """
+    try:
+        # Decode base64 image
+        image_array = _safe_decode_image(payload.image_data)
+
+        if image_array.size == 0:
+            return ScanMeasureResponseV2(
+                success=False,
+                scan_type="invalid",
+                measurements=None,
+                confidence=None,
+                warnings=["Invalid image: empty or corrupted"],
+                missing_landmarks=["image"],
+                message="Invalid image",
+                landmarks=[]
+            )
+
+        # Extract body landmarks using MediaPipe
+        landmarks = _safe_extract_landmarks(image_array)
+
+        if landmarks is None or not landmarks.get('landmarks'):
+            return ScanMeasureResponseV2(
+                success=False,
+                scan_type="invalid",
+                measurements=None,
+                confidence=None,
+                warnings=["Could not detect body in image. Please ensure the image shows a full body clearly."],
+                missing_landmarks=["body_not_detected"],
+                message="Could not detect body in image",
+                landmarks=[]
+            )
+
+        # Calculate enhanced measurements with validation
+        result = calculate_measurements_enhanced(landmarks, image_array.shape)
+
+        # Build response
+        measurements = None
+        if result['success'] and result['measurements']:
+            measurements = BodyMeasurements(**result['measurements'])
+
+        confidence = None
+        if result.get('confidence'):
+            confidence = MeasurementConfidence(**result['confidence'])
+
+        return ScanMeasureResponseV2(
+            success=result['success'],
+            scan_type=result['scan_type'],
+            measurements=measurements,
+            confidence=confidence,
+            warnings=result.get('warnings', []),
+            missing_landmarks=result.get('missing_landmarks', []),
+            message="Measurements extracted successfully" if result['success'] else "Measurement failed",
+            landmarks=landmarks.get('landmarks', [])
+        )
+
+    except Exception as e:
+        print(f"Measure-enhanced endpoint error: {e}")
+        return ScanMeasureResponseV2(
+            success=False,
+            scan_type="invalid",
+            measurements=None,
+            confidence=None,
+            warnings=[f"Error processing image: {str(e)}"],
+            missing_landmarks=[],
+            message="Error processing image",
             landmarks=[]
         )
 
@@ -528,6 +609,10 @@ class MeasureMultipleResponse(BaseModel):
     measurements: BodyMeasurements | None = None
     images: list[ImageResult] = Field(default_factory=list)
     message: str
+    # Enhanced fields
+    scan_type: Optional[str] = Field("full_body", description="Scan type: full_body, upper_body, or invalid")
+    confidence: Optional[dict] = Field(None, description="Confidence scores for each measurement")
+    warnings: list[str] = Field(default_factory=list, description="Warnings about scan quality")
 
 
 @router.post("/measure-multiple", response_model=MeasureMultipleResponse)
@@ -541,6 +626,7 @@ async def measure_multiple_images(payload: MeasureMultipleRequest):
         all_landmarks = {}
         all_measurements = {}
         image_results = []
+        front_enhanced = None
 
         for img_type in image_types:
             image_data = payload.images.get(img_type)
@@ -582,12 +668,20 @@ async def measure_multiple_images(payload: MeasureMultipleRequest):
                 ))
                 continue
 
-            # Calculate measurements for this image
-            measurements = calculate_measurements(landmarks, image_array.shape)
+            # Calculate measurements for this image using enhanced method
+            enhanced_result = calculate_measurements_enhanced(
+                landmarks,
+                image_array.shape
+            )
+            measurements = enhanced_result.get('measurements', {})
 
             # Store for aggregation
             all_landmarks[img_type] = landmarks
             all_measurements[img_type] = measurements
+
+            # Store enhanced data from front image for response
+            if img_type == 'front':
+                front_enhanced = enhanced_result
 
             image_results.append(ImageResult(
                 image_type=img_type,
@@ -597,30 +691,51 @@ async def measure_multiple_images(payload: MeasureMultipleRequest):
                 message="Processed successfully"
             ))
 
-        # Calculate combined measurements (use front image as primary)
-        combined_measurements = all_measurements.get('front', {
-            'height': 0,
-            'chest': 0,
-            'waist': 0,
-            'hips': 0,
-            'shoulder_width': 0
-        })
+        # Find the first image with valid measurements (fallback order: front, left, right, back)
+        combined_measurements = None
+        primary_scan_type = 'full_body'
+        primary_confidence = None
+        primary_warnings = []
+        primary_img_type = None
 
-        # If we have valid front measurements, return them
-        if combined_measurements.get('height', 0) > 0:
-            return MeasureMultipleResponse(
-                success=True,
-                measurements=BodyMeasurements(**combined_measurements),
-                images=image_results,
-                message="All images processed successfully"
-            )
-        else:
+        for img_type in ['front', 'left', 'right', 'back']:
+            measurements = all_measurements.get(img_type, {})
+            if measurements and measurements.get('height', 0) > 0:
+                combined_measurements = measurements
+                primary_img_type = img_type
+                # Get enhanced data for this image type
+                if img_type == 'front' and front_enhanced:
+                    primary_scan_type = front_enhanced.get('scan_type', 'full_body')
+                    primary_confidence = front_enhanced.get('confidence')
+                    primary_warnings = front_enhanced.get('warnings', [])
+                print(f"[DEBUG] Found valid measurements from {img_type} image (height: {measurements.get('height', 0):.1f}cm)")
+                break
+            else:
+                print(f"[DEBUG] {img_type} image failed or has no valid height (got: {measurements.get('height', 0):.1f}cm)")
+
+        # If no valid measurements from any image, return failure with details
+        if not combined_measurements or combined_measurements.get('height', 0) == 0:
+            failed_images = [r.image_type for r in image_results if not r.success]
             return MeasureMultipleResponse(
                 success=False,
                 measurements=None,
                 images=image_results,
-                message="Could not extract valid measurements from images"
+                message=f"Could not detect body in: {', '.join(failed_images)}. Please ensure full body is visible.",
+                scan_type="invalid",
+                confidence=None,
+                warnings=["No valid measurements found - all images failed body detection"]
             )
+
+        # Return measurements from the first successful image
+        return MeasureMultipleResponse(
+            success=True,
+            measurements=BodyMeasurements(**combined_measurements),
+            images=image_results,
+            message=f"Successfully processed {primary_img_type} image",
+            scan_type=primary_scan_type,
+            confidence=primary_confidence,
+            warnings=primary_warnings
+        )
 
     except Exception as e:
         print(f"Measure-multiple endpoint error: {e}")
@@ -628,5 +743,8 @@ async def measure_multiple_images(payload: MeasureMultipleRequest):
             success=False,
             measurements=None,
             images=[],
-            message=f"Error processing images: {str(e)}"
+            message=f"Error processing images: {str(e)}",
+            scan_type="invalid",
+            confidence=None,
+            warnings=[f"Error processing images: {str(e)}"]
         )
