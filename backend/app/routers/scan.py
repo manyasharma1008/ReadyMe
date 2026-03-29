@@ -2,12 +2,12 @@ import base64
 import io
 import cv2
 from typing import Optional
-from fastapi import APIRouter, UploadFile, File, HTTPException
+from fastapi import APIRouter, UploadFile, File, HTTPException, Query
 from PIL import Image
 import numpy as np
 from pydantic import BaseModel, Field
 
-from app.models.schemas import ScanMeasureResponse, BodyMeasurements, ScanMeasureResponseV2, MeasurementConfidence
+from app.models.schemas import ScanMeasureResponse, BodyMeasurements, ScanMeasureResponseV2, MeasurementConfidence, MeasurementConfidenceLevel
 from app.services.preprocessing import preprocess_image
 from app.services.mediapipe_extractor import extract_body_landmarks
 from app.services.measurement import (
@@ -18,7 +18,9 @@ from app.services.measurement import (
     get_calibration_factor,
     reset_calibration,
     calculate_measurements_calibrated,
-    get_calibration_system
+    get_calibration_system,
+    fuse_measurements,
+    DEFAULT_USER_HEIGHT_CM
 )
 from app.services.visualization import create_visualization
 
@@ -56,6 +58,7 @@ class MeasureWithCalibrationRequest(BaseModel):
 class MeasureBase64Request(BaseModel):
     """Request model for base64 image measurement."""
     image_data: str = Field(..., description="Base64 encoded image data")
+    user_height: float = Field(DEFAULT_USER_HEIGHT_CM, description="User's actual height in cm")
 
 
 class VisualizationResponse(BaseModel):
@@ -132,10 +135,13 @@ def _safe_extract_landmarks(image_array: np.ndarray) -> dict:
 
 @router.post("/measure", response_model=ScanMeasureResponse)
 async def measure_body(
-    image: UploadFile = File(...)
+    image: UploadFile = File(...),
+    user_height: float = Query(DEFAULT_USER_HEIGHT_CM, description="User's actual height in cm")
 ):
     """
     Analyze a body image and extract measurements.
+
+    Uses ratio-based normalization for distance-independent measurements.
     """
     try:
         # Read and validate image
@@ -162,12 +168,16 @@ async def measure_body(
                 landmarks=[]
             )
 
-        # Calculate measurements from landmarks
-        measurements = calculate_measurements(landmarks, image_array.shape)
+        # Calculate measurements from landmarks using ratio-based normalization
+        result = calculate_measurements_enhanced(
+            landmarks,
+            image_array.shape,
+            user_height_cm=user_height
+        )
 
         return ScanMeasureResponse(
-            success=True,
-            measurements=BodyMeasurements(**measurements),
+            success=result.get('success', False),
+            measurements=BodyMeasurements(**result.get('measurements', {})),
             message="Measurements extracted successfully",
             landmarks=landmarks.get('landmarks', [])
         )
@@ -186,9 +196,13 @@ async def measure_body(
 async def measure_body_base64(payload: MeasureBase64Request):
     """
     Analyze a body image from base64 string and extract measurements.
+
+    Uses ratio-based normalization for distance-independent measurements.
     """
     try:
         image_data = payload.image_data
+        user_height = payload.user_height
+
         if not image_data:
             return ScanMeasureResponse(
                 success=False,
@@ -227,12 +241,16 @@ async def measure_body_base64(payload: MeasureBase64Request):
                 landmarks=[]
             )
 
-        # Calculate measurements from landmarks
-        measurements = calculate_measurements(landmarks, image_array.shape)
+        # Calculate measurements from landmarks using ratio-based normalization
+        result = calculate_measurements_enhanced(
+            landmarks,
+            image_array.shape,
+            user_height_cm=user_height
+        )
 
         return ScanMeasureResponse(
-            success=True,
-            measurements=BodyMeasurements(**measurements),
+            success=result.get('success', False),
+            measurements=BodyMeasurements(**result.get('measurements', {})),
             message="Measurements extracted successfully",
             landmarks=landmarks.get('landmarks', [])
         )
@@ -619,9 +637,13 @@ class MeasureMultipleResponse(BaseModel):
 async def measure_multiple_images(payload: MeasureMultipleRequest):
     """
     Analyze multiple body images (front, back, left, right) at once.
-    Returns landmarks for each image and combined measurements.
+
+    Uses multi-angle fusion (STEP 7) to combine measurements from all valid angles.
+    Removes outliers outside ±20% of median, returns median of filtered values.
     """
     try:
+        user_height = payload.user_height_cm if payload.user_height_cm else DEFAULT_USER_HEIGHT_CM
+
         image_types = ['front', 'back', 'left', 'right']
         all_landmarks = {}
         all_measurements = {}
@@ -668,10 +690,11 @@ async def measure_multiple_images(payload: MeasureMultipleRequest):
                 ))
                 continue
 
-            # Calculate measurements for this image using enhanced method
+            # Calculate measurements for this image using enhanced method with ratio-based normalization
             enhanced_result = calculate_measurements_enhanced(
                 landmarks,
-                image_array.shape
+                image_array.shape,
+                user_height_cm=user_height
             )
             measurements = enhanced_result.get('measurements', {})
 
@@ -691,27 +714,28 @@ async def measure_multiple_images(payload: MeasureMultipleRequest):
                 message="Processed successfully"
             ))
 
-        # Find the first image with valid measurements (fallback order: front, left, right, back)
-        combined_measurements = None
+        # STEP 7: Multi-angle fusion - combine measurements from all valid angles
+        fused_measurements, fusion_debug = fuse_measurements(all_measurements)
+
+        # Use fused measurements as combined measurements
+        combined_measurements = fused_measurements if fused_measurements else None
         primary_scan_type = 'full_body'
         primary_confidence = None
         primary_warnings = []
-        primary_img_type = None
 
-        for img_type in ['front', 'left', 'right', 'back']:
-            measurements = all_measurements.get(img_type, {})
-            if measurements and measurements.get('height', 0) > 0:
-                combined_measurements = measurements
-                primary_img_type = img_type
-                # Get enhanced data for this image type
-                if img_type == 'front' and front_enhanced:
-                    primary_scan_type = front_enhanced.get('scan_type', 'full_body')
-                    primary_confidence = front_enhanced.get('confidence')
-                    primary_warnings = front_enhanced.get('warnings', [])
-                print(f"[DEBUG] Found valid measurements from {img_type} image (height: {measurements.get('height', 0):.1f}cm)")
-                break
-            else:
-                print(f"[DEBUG] {img_type} image failed or has no valid height (got: {measurements.get('height', 0):.1f}cm)")
+        # Compute confidence levels from consistency check
+        consistency = fusion_debug.get('consistency', {})
+        confidence_level = MeasurementConfidenceLevel(
+            height=consistency.get('height', 'medium'),
+            chest=consistency.get('chest', 'medium'),
+            waist=consistency.get('waist', 'medium'),
+            hips=consistency.get('hips', 'medium'),
+            shoulders=consistency.get('shoulders', 'medium')
+        )
+
+        if front_enhanced:
+            primary_scan_type = front_enhanced.get('scan_type', 'full_body')
+            primary_warnings = front_enhanced.get('warnings', [])
 
         # If no valid measurements from any image, return failure with details
         if not combined_measurements or combined_measurements.get('height', 0) == 0:
@@ -731,9 +755,9 @@ async def measure_multiple_images(payload: MeasureMultipleRequest):
             success=True,
             measurements=BodyMeasurements(**combined_measurements),
             images=image_results,
-            message=f"Successfully processed {primary_img_type} image",
+            message=f"Successfully processed multiple images",
             scan_type=primary_scan_type,
-            confidence=primary_confidence,
+            confidence=confidence_level,
             warnings=primary_warnings
         )
 
