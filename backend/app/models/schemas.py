@@ -34,6 +34,15 @@ class MeasurementConfidence(BaseModel):
     shoulder_width: float = Field(0.0, description="Confidence for shoulder width measurement")
 
 
+class MeasurementConfidenceLevel(BaseModel):
+    """Confidence levels for each measurement (high/medium/low)."""
+    height: str = Field("low", description="Confidence level: high, medium, or low")
+    chest: str = Field("low", description="Confidence level: high, medium, or low")
+    waist: str = Field("low", description="Confidence level: high, medium, or low")
+    hips: str = Field("low", description="Confidence level: high, medium, or low")
+    shoulders: str = Field("low", description="Confidence level: high, medium, or low")
+
+
 class ScanClassificationResult(BaseModel):
     """Result of scan type classification."""
     scan_type: str = Field(..., description="Scan type: full_body, upper_body, or invalid")

@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom"
 import { useScanImage } from "../hooks"
 import { useMediaPipe } from "../hooks/useMediaPipe"
 import { useApp } from "../context/AppContext"
-import { scanMeasureEnhanced } from "../api"
+import { scanMeasureEnhanced, scanMeasureMultiple } from "../api"
 import LoadingSpinner from "../components/common/LoadingSpinner"
 import ErrorMessage from "../components/common/ErrorMessage"
 
@@ -202,6 +202,8 @@ function BodyScan() {
   const [countingDown, setCountingDown] = useState(false)
   const [countdownNumber, setCountdownNumber] = useState(3)
   const [localError, setLocalError] = useState(null)
+  const [isCapturing, setIsCapturing] = useState(false)
+  const [currentCaptureStep, setCurrentCaptureStep] = useState(0)
 
   const { setMeasurements, setConfidenceScores, setWarnings, setScanClassification } = useApp()
   const { scan, loading, error: scanError, clearError } = useScanImage()
@@ -563,6 +565,279 @@ function BodyScan() {
     }
   }
 
+  // Automated multi-capture function - captures 4 images with countdowns
+  const startAutoCapture = async () => {
+    if (isCapturing || countingDown || loading) return
+
+    setIsCapturing(true)
+    setStep(1)
+    clearError()
+    setShowVisualization(false)
+    setVisualizationImage(null)
+    setMultiScanResults(null)
+    setShowLandmarks(true)
+
+    // Use local variables to collect images (state updates are async)
+    const capturedImagesArray = []
+    const capturedImagesMapLocal = { front: null, left: null, right: null, back: null }
+
+    for (let i = 0; i < 4; i++) {
+      setCurrentCaptureStep(i + 1)
+      setStep(i + 1)
+
+      // Show "turn to next pose" message for steps 2-4
+      if (i > 0) {
+        setCountingDown(true)
+        setCountdownNumber(0)
+        // Give user 3 seconds to turn to next position
+        for (let t = 3; t > 0; t--) {
+          setCountdownNumber(-t) // negative to show "turn" message
+          await new Promise(resolve => setTimeout(resolve, 1000))
+        }
+      }
+
+      // Safety check: ensure landmarks exist before capture
+      if (!currentLandmarks || currentLandmarks.length === 0) {
+        setLocalError("Please stand properly in frame")
+        setIsCapturing(false)
+        setCountingDown(false)
+        return
+      }
+
+      // Countdown: 3 -> 2 -> 1
+      setCountingDown(true)
+      for (let t = 3; t > 0; t--) {
+        setCountdownNumber(t)
+        await new Promise(resolve => setTimeout(resolve, 1000))
+      }
+      setCountingDown(false)
+
+      // Capture frame
+      const imageData = captureFrame()
+      if (!imageData) {
+        setLocalError("Failed to capture image")
+        setIsCapturing(false)
+        return
+      }
+
+      // Store in local variables
+      const imageType = stepToImageType[i + 1]
+      capturedImagesMapLocal[imageType] = imageData
+      capturedImagesArray.push(imageData)
+
+      // Also update state for UI display
+      setCapturedImagesMap(prev => ({ ...prev, [imageType]: imageData }))
+      setCapturedImages(prev => [...prev, imageData])
+
+      console.log(`Captured ${imageType} image`)
+    }
+
+    // All 4 captured - proceed to processing
+    setIsCapturing(false)
+    stopDetection()
+    stopCamera()
+
+    // Pass images directly from local variables
+    await processScannedImages(capturedImagesMapLocal, capturedImagesArray)
+  }
+
+  // Process scanned images - handles backend API calls
+  const processScannedImages = async (imagesMapArg, imagesArray) => {
+    if (!imagesArray || imagesArray.length === 0) {
+      setLocalError("No images captured")
+      return
+    }
+
+    // Build images object
+    const imagesToSend = {
+      front: imagesMapArg.front,
+      left: imagesMapArg.left,
+      right: imagesMapArg.right,
+      back: imagesMapArg.back
+    }
+
+    setLocalError(null)
+    clearError()
+    setMultiLoading(true)
+
+    try {
+      // Normalize to base64
+      const normalizeToBase64 = async (img) => {
+        if (!img) return null
+        if (typeof img === "string") {
+          return img.includes(",") ? img.split(",")[1] : img
+        }
+        return new Promise((resolve, reject) => {
+          const reader = new FileReader()
+          reader.readAsDataURL(img)
+          reader.onload = () => {
+            const result = reader.result
+            const base64 = result.split(",")[1]
+            resolve(base64)
+          }
+          reader.onerror = reject
+        })
+      }
+
+      const base64Images = {
+        front: await normalizeToBase64(imagesToSend.front),
+        back: await normalizeToBase64(imagesToSend.back),
+        left: await normalizeToBase64(imagesToSend.left),
+        right: await normalizeToBase64(imagesToSend.right),
+      }
+
+      // Safety check
+      const base64Values = Object.values(base64Images).filter(Boolean)
+      if (base64Values.length === 0 || !base64Values.every(v => typeof v === "string")) {
+        setLocalError("Image conversion failed. Please try again.")
+        setMultiLoading(false)
+        return
+      }
+
+      console.log("ENHANCED PIPELINE ACTIVE ✅")
+      console.log("Base64 Images prepared:", Object.keys(base64Images))
+      console.log("Image lengths:", {
+        front: base64Images.front?.length,
+        back: base64Images.back?.length,
+        left: base64Images.left?.length,
+        right: base64Images.right?.length,
+      })
+
+      // Call measure-multiple endpoint (returns images with landmarks for 2x2 grid)
+      const heightVal = parseFloat(userHeight)
+      const heightParam = userHeight && heightVal > 100 && heightVal < 250 ? heightVal : null
+
+      // First, get measurements from each image individually (like original manual flow)
+      const responses = await Promise.all([
+        base64Images.front ? scanMeasureEnhanced(base64Images.front, heightParam) : null,
+        base64Images.back ? scanMeasureEnhanced(base64Images.back, heightParam) : null,
+        base64Images.left ? scanMeasureEnhanced(base64Images.left, heightParam) : null,
+        base64Images.right ? scanMeasureEnhanced(base64Images.right, heightParam) : null,
+      ])
+
+      console.log("Individual responses:", responses)
+
+      setMultiLoading(false)
+
+      // Filter valid responses
+      const validResponses = responses.filter(
+        (r) => r && r.measurements && Object.keys(r.measurements).length > 0
+      )
+
+      if (validResponses.length === 0) {
+        console.error("No valid scan responses ❌")
+        setScanClassification({ type: "invalid", confidence: 0 })
+        setWarnings(["Scan failed. Please ensure full body is visible and try again."])
+        setConfidenceScores({})
+        return
+      }
+
+      // Now get visualization data from measure-multiple for the 2x2 grid
+      const visResponse = await scanMeasureMultiple(base64Images, heightParam)
+
+      // Set multiScanResults for 2x2 grid display (from visualize endpoint)
+      if (visResponse && visResponse.images) {
+        setMultiScanResults({ images: visResponse.images })
+      }
+
+      console.log("Valid responses count:", validResponses.length)
+
+      // Combine measurements from all valid responses
+      const measurementsList = validResponses.map(r => r.measurements)
+      const finalMeasurements = {
+        height: 0,
+        chest: 0,
+        waist: 0,
+        hips: 0,
+        shoulder_width: 0,
+      }
+
+      const measurementKeys = ["height", "chest", "waist", "hips", "shoulder_width"]
+      measurementKeys.forEach(key => {
+        const values = measurementsList
+          .map(m => m[key])
+          .filter(v => typeof v === "number" && v > 0)
+        if (values.length > 0) {
+          finalMeasurements[key] = values.reduce((a, b) => a + b, 0) / values.length
+        }
+      })
+
+      console.log("Final measurements:", finalMeasurements)
+
+      // Combine scan types
+      const scanTypes = validResponses.map(r => r.scan_type)
+      let finalScanType = "invalid"
+      if (scanTypes.includes("full_body")) {
+        finalScanType = "full_body"
+      } else if (scanTypes.includes("upper_body")) {
+        finalScanType = "upper_body"
+      }
+
+      // Combine warnings
+      const warnings = [...new Set(validResponses.flatMap(r => r.warnings || []))]
+
+      // Combine confidence
+      const confidenceList = validResponses.map(r => r.confidence || {})
+      const combinedConfidence = {}
+
+      confidenceList.forEach(conf => {
+        Object.keys(conf).forEach(key => {
+          if (!combinedConfidence[key]) combinedConfidence[key] = []
+          if (typeof conf[key] === "number") {
+            combinedConfidence[key].push(conf[key])
+          }
+        })
+      })
+
+      Object.keys(combinedConfidence).forEach(key => {
+        const values = combinedConfidence[key]
+        if (values.length > 0) {
+          combinedConfidence[key] = values.reduce((a, b) => a + b, 0) / values.length
+        } else {
+          combinedConfidence[key] = 0
+        }
+      })
+
+      console.log("Final Type:", finalScanType)
+      console.log("Confidence:", combinedConfidence)
+      console.log("Warnings:", warnings)
+      console.log("Final Measurements:", finalMeasurements)
+
+      // Set state
+      setScanClassification({
+        type: finalScanType,
+        confidence: combinedConfidence.overall || Math.max(...Object.values(combinedConfidence), 0)
+      })
+
+      setWarnings(warnings)
+      setConfidenceScores(combinedConfidence)
+      setMeasurements(finalMeasurements)
+
+      // Handle invalid scans
+      if (finalScanType === "invalid") {
+        setLocalError("Scan failed. Please ensure full body is visible and try again.")
+        return
+      }
+
+      // Validate final measurements
+      console.log("Validating measurements - height:", finalMeasurements?.height)
+      if (!finalMeasurements || finalMeasurements.height <= 0) {
+        console.error("Measurements validation failed:", finalMeasurements)
+        setLocalError("Invalid measurements returned - please try again with better lighting")
+        return
+      }
+
+      // Navigate after 3.5 seconds
+      setTimeout(() => {
+        navigate("/size-result")
+      }, 3500)
+
+    } catch (err) {
+      console.error("Scan error:", err)
+      setLocalError(err.message || "An error occurred during scanning")
+    }
+  }
+
   const handleSkipToManual = () => {
     stopCamera()
     navigate("/size-result")
@@ -681,8 +956,21 @@ function BodyScan() {
           {/* Countdown overlay */}
           {countingDown && (
             <div className="absolute inset-0 bg-black/70 flex flex-col items-center justify-center text-white">
-              <p className="text-8xl font-bold text-clay animate-pulse">{countdownNumber}</p>
-              <p className="mt-4 text-lg">Get ready!</p>
+              {countdownNumber > 0 ? (
+                <>
+                  <p className="text-8xl font-bold text-clay animate-pulse">{countdownNumber}</p>
+                  <p className="mt-4 text-lg">
+                    {isCapturing ? instructions[currentCaptureStep - 1] : "Get ready!"}
+                  </p>
+                </>
+              ) : (
+                <>
+                  <p className="text-4xl font-bold text-clay">Turn to next position</p>
+                  <p className="mt-4 text-lg">
+                    {instructions[currentCaptureStep - 1]}
+                  </p>
+                </>
+              )}
             </div>
           )}
         </div>
@@ -776,16 +1064,16 @@ function BodyScan() {
 
       {/* Capture Button */}
       <button
-        onClick={handleCapture}
-        disabled={loading || countingDown}
+        onClick={startAutoCapture}
+        disabled={loading || countingDown || isCapturing}
         className={`mt-6 text-sm relative group transition-all duration-300 ${
-          loading || countingDown
+          loading || countingDown || isCapturing
             ? "text-gray-400 cursor-not-allowed"
             : "text-charcoal-900"
         }`}
       >
         <span className="relative z-10">
-          {loading ? "Processing..." : countingDown ? "Get Ready..." : "Capture"}
+          {loading ? "Processing..." : isCapturing ? "Scanning..." : "Start Scan"}
         </span>
 
         <span className="absolute left-0 bottom-0 w-0 h-[1px] bg-charcoal-900 transition-all duration-300 group-hover:w-full"></span>
@@ -801,7 +1089,7 @@ function BodyScan() {
 
       {/* Step */}
       <p className="mt-3 text-sm text-charcoal-700/70">
-        Step {step} of 4
+        {isCapturing ? `Capturing ${currentCaptureStep} of 4` : `Step ${step} of 4`}
       </p>
 
       {/* Dots */}
@@ -810,7 +1098,7 @@ function BodyScan() {
           <div
             key={s}
             className={`w-2 h-2 rounded-full ${
-              s === step ? "bg-charcoal-900" : "bg-gray-300"
+              s === (isCapturing ? currentCaptureStep : step) ? "bg-charcoal-900" : "bg-gray-300"
             }`}
           />
         ))}

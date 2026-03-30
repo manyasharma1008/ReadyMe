@@ -34,6 +34,20 @@ FULL_BODY_LANDMARKS = [0, 11, 12, 23, 24, 25, 26, 27, 28]  # nose, shoulders, hi
 UPPER_BODY_LANDMARKS = [0, 11, 12, 23, 24]  # nose, shoulders, hips
 VISIBILITY_THRESHOLD = 0.5  # Minimum visibility to consider landmark valid
 
+# Ratio-based normalization settings
+DEFAULT_USER_HEIGHT_CM = 170.0  # Default height when not provided
+LANDMARK_CONFIDENCE_THRESHOLD = 0.6  # Minimum confidence for valid measurements
+
+# Multi-angle fusion settings
+MIN_ANGLES_FOR_AVG = 2  # Minimum angles needed for fusion
+OUTLIER_THRESHOLD_PCT = 0.20  # ±20% from median for outlier filtering
+
+# Height calculation settings
+TRIM_PERCENT = 0.05  # Remove top/bottom 5% of Y values for height calculation
+
+# Consistency check settings
+CONSISTENCY_THRESHOLD = 0.25  # Mark as low confidence if variation > 25%
+
 
 def validate_landmarks(landmarks: list, visibility_threshold: float = VISIBILITY_THRESHOLD) -> dict:
     """
@@ -231,6 +245,25 @@ def compute_confidence(landmarks: list, scan_type: str, has_calibration: bool = 
         # Height, waist, hips are not available - keep at 0.0
 
     return confidence
+
+
+def get_confidence_level(consistency: str, visibility: float) -> str:
+    """
+    Convert numeric confidence to level string.
+
+    Args:
+        consistency: 'high' or 'low' from consistency check
+        visibility: Average visibility score (0-1)
+
+    Returns:
+        'high', 'medium', or 'low'
+    """
+    if consistency == 'low':
+        return 'low'
+    elif visibility > 0.8:
+        return 'high'
+    else:
+        return 'medium'
 
 
 def check_framing(landmarks: list, image_shape: tuple) -> dict:
@@ -503,11 +536,82 @@ def euclidean_distance_2d(p1: dict, p2: dict) -> float:
     )
 
 
+def calculate_pixel_height(landmarks: list, image_shape: tuple) -> float:
+    """
+    Calculate body height in pixels using trimmed Y values.
+
+    Collects all visible landmark Y values, removes top/bottom 5%,
+    then computes height from remaining values. This is robust against
+    outlier landmarks (e.g., raised arms affecting min/max Y).
+
+    Args:
+        landmarks: List of body landmarks
+        image_shape: Shape of the original image (height, width, channels)
+
+    Returns:
+        Height in pixels
+    """
+    if not landmarks or len(landmarks) < 29:
+        return 0.0
+
+    try:
+        # Collect all Y values from visible landmarks
+        y_values = []
+        for lm in landmarks:
+            if lm.get('visibility', 0) > LANDMARK_CONFIDENCE_THRESHOLD:
+                y_values.append(lm['y'])
+
+        if len(y_values) < 10:
+            # Fallback to nose-ankle if too few landmarks visible
+            nose = landmarks[0]
+            left_ankle = landmarks[27]
+            right_ankle = landmarks[28]
+            ankle_y = max(left_ankle['y'], right_ankle['y'])
+            return max(0, (ankle_y - nose['y']) * image_shape[0])
+
+        # Sort and remove top/bottom 5%
+        y_values.sort()
+        trim_count = max(1, int(len(y_values) * TRIM_PERCENT))
+        trimmed = y_values[trim_count:-trim_count] if trim_count < len(y_values) else y_values
+
+        min_y = min(trimmed)
+        max_y = max(trimmed)
+        pixel_height = (max_y - min_y) * image_shape[0]
+
+        return max(0, pixel_height)
+    except Exception:
+        return 0.0
+
+
+def measure_from_ratio(pixel_distance: float, pixel_height: float,
+                       user_height_cm: float = DEFAULT_USER_HEIGHT_CM) -> float:
+    """
+    Convert pixel measurement to cm using ratio normalization.
+
+    measurement_cm = (body_part_px / height_px) * user_height_cm
+
+    This makes measurements independent of distance.
+
+    Args:
+        pixel_distance: Measurement in pixels
+        pixel_height: Total body height in pixels
+        user_height_cm: User's actual height in cm
+
+    Returns:
+        Measurement in cm
+    """
+    if pixel_height <= 0:
+        return 0.0
+
+    ratio = pixel_distance / pixel_height
+    return ratio * user_height_cm
+
+
 def calculate_height(landmarks: list, image_shape: tuple) -> float:
     """
     Calculate body height from pose landmarks.
 
-    Uses the distance between nose and average ankle position.
+    Uses min/max Y from ALL visible landmarks (robust to pose/tilt).
 
     Args:
         landmarks: List of body landmarks
@@ -516,133 +620,391 @@ def calculate_height(landmarks: list, image_shape: tuple) -> float:
     Returns:
         Estimated height in cm
     """
-    # Validate landmarks
     if not landmarks or len(landmarks) < 29:
-        return 170.0  # Default fallback height
+        return DEFAULT_USER_HEIGHT_CM
 
     try:
-        nose = landmarks[0]
-        left_ankle = landmarks[27]
-        right_ankle = landmarks[28]
+        # Collect all landmarks with visibility > 0.5
+        visible_y_values = []
+        for landmark in landmarks:
+            if landmark.get('visibility', 0) > 0.5:
+                visible_y_values.append(landmark['y'])
 
-        # Use ankle average for more accurate bottom reference
-        avg_ankle_x = (left_ankle['x'] + right_ankle['x']) / 2
-        avg_ankle_y = (left_ankle['y'] + right_ankle['y']) / 2
+        if not visible_y_values:
+            return DEFAULT_USER_HEIGHT_CM
 
-        # Calculate height in pixels
-        height_pixels = math.sqrt(
-            (nose['x'] - avg_ankle_x)**2 +
-            (nose['y'] - avg_ankle_y)**2
-        ) * max(image_shape[0], image_shape[1])
+        min_y = min(visible_y_values)
+        max_y = max(visible_y_values)
+        pixel_height = (max_y - min_y) * image_shape[0]
 
-        # Convert to cm using estimated average
-        # Assuming average height of 170cm for scaling
-        height_cm = height_pixels * 0.5  # Approximate conversion
-
-        # Clamp to reasonable human height range
-        return max(120, min(220, height_cm))
+        return max(0, pixel_height)
     except Exception:
-        return 170.0  # Default fallback
+        return DEFAULT_USER_HEIGHT_CM
 
 
-def calculate_shoulder_width(landmarks: list, image_shape: tuple) -> float:
+def validate_shoulders(landmarks: list, image_shape: tuple = None) -> tuple[bool, str]:
     """
-    Calculate shoulder width from pose landmarks.
+    Validate shoulders for measurement quality.
 
-    Uses the distance between left and right shoulders.
+    Requirements:
+    - Both shoulders visibility > 0.6
+    - Horizontal distance > 0.05 (normalized)
 
     Args:
         landmarks: List of body landmarks
-        image_shape: Shape of the original image
+        image_shape: Shape of the original image (unused, kept for API consistency)
 
     Returns:
-        Shoulder width in cm
+        Tuple of (is_valid, reason)
     """
-    # Validate landmarks
     if not landmarks or len(landmarks) < 13:
-        return 40.0  # Default fallback
+        return False, "insufficient_landmarks"
 
     try:
         left_shoulder = landmarks[11]
         right_shoulder = landmarks[12]
 
-        # Calculate distance in normalized coordinates
-        distance = euclidean_distance_2d(left_shoulder, right_shoulder)
+        # Check visibility
+        left_visibility = left_shoulder.get('visibility', 0)
+        right_visibility = right_shoulder.get('visibility', 0)
 
-        # Convert to pixels
-        shoulder_pixels = distance * image_shape[1]
+        if left_visibility <= LANDMARK_CONFIDENCE_THRESHOLD:
+            return False, "left_shoulder_low_visibility"
+        if right_visibility <= LANDMARK_CONFIDENCE_THRESHOLD:
+            return False, "right_shoulder_low_visibility"
 
-        # Convert to cm using average proportions
-        shoulder_cm = shoulder_pixels * 0.4
+        # Check horizontal distance
+        delta_x = abs(right_shoulder['x'] - left_shoulder['x'])
+        if delta_x <= 0.05:
+            return False, "shoulders_too_close"
 
-        return max(25, min(60, shoulder_cm))
+        return True, "valid"
     except Exception:
-        return 40.0  # Default fallback
+        return False, "validation_error"
 
 
-def calculate_chest(landmarks: list, image_shape: tuple, shoulder_width: float) -> float:
+def calculate_shoulder_width(landmarks: list, image_shape: tuple,
+                              pixel_height: float, user_height_cm: float = DEFAULT_USER_HEIGHT_CM) -> tuple[float, bool]:
+    """
+    Calculate shoulder width from pose landmarks.
+
+    Uses Euclidean distance between left and right shoulders,
+    converts using ratio-based normalization.
+
+    Args:
+        landmarks: List of body landmarks
+        image_shape: Shape of the original image
+        pixel_height: Body height in pixels (from calculate_height)
+        user_height_cm: User's actual height in cm
+
+    Returns:
+        Tuple of (shoulder_width_cm, is_valid)
+    """
+    if not landmarks or len(landmarks) < 13:
+        return 0.0, False
+
+    try:
+        left_shoulder = landmarks[11]
+        right_shoulder = landmarks[12]
+
+        # Check confidence
+        if left_shoulder.get('visibility', 0) < LANDMARK_CONFIDENCE_THRESHOLD or \
+           right_shoulder.get('visibility', 0) < LANDMARK_CONFIDENCE_THRESHOLD:
+            return 0.0, False
+
+        # Euclidean distance in normalized coordinates
+        dx = right_shoulder['x'] - left_shoulder['x']
+        dy = right_shoulder['y'] - left_shoulder['y']
+        shoulder_px = math.sqrt(dx**2 + dy**2) * image_shape[1]
+
+        # Convert using ratio: measurement_cm = (px / height_px) * user_height_cm
+        if pixel_height <= 0:
+            return 0.0, False
+
+        shoulder_cm = (shoulder_px / pixel_height) * user_height_cm
+
+        return max(25, min(60, shoulder_cm)), True
+    except Exception:
+        return 0.0, False
+
+
+def calculate_chest(landmarks: list, image_shape: tuple, pixel_height: float,
+                    user_height_cm: float = DEFAULT_USER_HEIGHT_CM) -> tuple[float, bool]:
     """
     Calculate chest circumference from pose landmarks.
 
-    Uses shoulder width ratio and estimated depth.
+    Uses shoulder width with empirical circumference conversion.
+    chest_px ≈ shoulder_px (same or slightly larger)
 
     Args:
         landmarks: List of body landmarks
         image_shape: Shape of the original image
-        shoulder_width: Calculated shoulder width in cm
+        pixel_height: Body height in pixels
+        user_height_cm: User's actual height in cm
 
     Returns:
-        Chest measurement in cm
+        Tuple of (chest_cm, is_valid)
     """
-    # Chest is approximately 1.1x shoulder width for average build
-    chest_ratio = AVERAGE_HUMAN_RATIOS['chest_to_shoulder_ratio']
+    if not landmarks or len(landmarks) < 13 or pixel_height <= 0:
+        return 0.0, False
 
-    # We estimate based on shoulder width since MediaPipe doesn't give
-    # depth information directly
-    chest_cm = shoulder_width * chest_ratio
+    try:
+        left_shoulder = landmarks[11]
+        right_shoulder = landmarks[12]
 
-    return max(70, min(140, chest_cm))
+        # Check confidence
+        if left_shoulder.get('visibility', 0) < LANDMARK_CONFIDENCE_THRESHOLD or \
+           right_shoulder.get('visibility', 0) < LANDMARK_CONFIDENCE_THRESHOLD:
+            return 0.0, False
+
+        # Euclidean distance between shoulders
+        dx = right_shoulder['x'] - left_shoulder['x']
+        dy = right_shoulder['y'] - left_shoulder['y']
+        shoulder_px = math.sqrt(dx**2 + dy**2) * image_shape[1]
+
+        # Chest is approximately same width as shoulders
+        chest_px = shoulder_px * 1.05  # Slightly larger
+
+        # Convert width to circumference using empirical formula
+        chest_width_cm = (chest_px / pixel_height) * user_height_cm
+        chest_cm = chest_width_cm * 2.2  # Empirical circumference conversion
+
+        return max(70, min(140, chest_cm)), True
+    except Exception:
+        return 0.0, False
 
 
-def calculate_waist(landmarks: list, image_shape: tuple, shoulder_width: float) -> float:
+# Empirical circumference conversion constant
+CIRCUMFERENCE_CONVERSION = 2.2
+
+# Waist is above hips - approximately 85% of shoulder width
+WAIST_TO_SHOULDER_RATIO = 0.85
+
+
+def calculate_waist(landmarks: list, image_shape: tuple, pixel_height: float,
+                    user_height_cm: float = DEFAULT_USER_HEIGHT_CM) -> tuple[float, bool]:
     """
-    Calculate waist measurement from pose landmarks.
+    Calculate waist measurement from pose landmarks using shoulder-hip interpolation.
 
-    Uses hip landmarks and shoulder width ratio.
+    Waist is estimated as the average of shoulder and hip width, multiplied by 0.9.
+    This reduces shoulder dependency and provides more accurate estimation.
+
+    Uses hip visibility for visibility check (NOT distance).
 
     Args:
         landmarks: List of body landmarks
         image_shape: Shape of the original image
-        shoulder_width: Calculated shoulder width in cm
+        pixel_height: Body height in pixels
+        user_height_cm: User's actual height in cm
 
     Returns:
-        Waist measurement in cm
+        Tuple of (waist_cm, is_visible)
     """
-    # Validate landmarks
-    if not landmarks or len(landmarks) < 25:
-        return 80.0  # Default fallback
+    if not landmarks or len(landmarks) < 25 or pixel_height <= 0:
+        return 0.0, False
+
+    try:
+        left_shoulder = landmarks[11]
+        right_shoulder = landmarks[12]
+        left_hip = landmarks[23]
+        right_hip = landmarks[24]
+
+        # STEP 8: Visibility check - waist visible if hip landmarks have visibility > 0.6
+        if left_hip.get('visibility', 0) < LANDMARK_CONFIDENCE_THRESHOLD or \
+           right_hip.get('visibility', 0) < LANDMARK_CONFIDENCE_THRESHOLD:
+            return 0.0, False
+
+        # Check shoulder confidence
+        if left_shoulder.get('visibility', 0) < LANDMARK_CONFIDENCE_THRESHOLD or \
+           right_shoulder.get('visibility', 0) < LANDMARK_CONFIDENCE_THRESHOLD:
+            return 0.0, False
+
+        # Get shoulder width
+        dx = right_shoulder['x'] - left_shoulder['x']
+        dy = right_shoulder['y'] - left_shoulder['y']
+        shoulder_width_px = math.sqrt(dx**2 + dy**2) * image_shape[1]
+
+        # Get hip width
+        hip_width_px = abs(right_hip['x'] - left_hip['x']) * image_shape[1]
+
+        # Interpolate: waist = average of shoulder and hip width * 0.9
+        torso_width = (shoulder_width_px + hip_width_px) / 2
+        waist_px = torso_width * 0.9
+
+        # Convert width to circumference using empirical formula
+        waist_width_cm = (waist_px / pixel_height) * user_height_cm
+        waist_cm = waist_width_cm * CIRCUMFERENCE_CONVERSION
+
+        return max(50, min(130, waist_cm)), True
+    except Exception:
+        return 0.0, False
+
+
+def calculate_hips(landmarks: list, image_shape: tuple, pixel_height: float,
+                   user_height_cm: float = DEFAULT_USER_HEIGHT_CM) -> tuple[float, bool]:
+    """
+    Calculate hips measurement from pose landmarks.
+
+    Uses hip landmarks with empirical circumference conversion.
+
+    Args:
+        landmarks: List of body landmarks
+        image_shape: Shape of the original image
+        pixel_height: Body height in pixels
+        user_height_cm: User's actual height in cm
+
+    Returns:
+        Tuple of (hips_cm, is_valid)
+    """
+    if not landmarks or len(landmarks) < 25 or pixel_height <= 0:
+        return 0.0, False
 
     try:
         left_hip = landmarks[23]
         right_hip = landmarks[24]
 
-        # Calculate waist width from hip landmarks
-        distance = euclidean_distance_2d(left_hip, right_hip)
-        waist_pixels = distance * image_shape[1]
+        # Check visibility
+        if left_hip.get('visibility', 0) < LANDMARK_CONFIDENCE_THRESHOLD or \
+           right_hip.get('visibility', 0) < LANDMARK_CONFIDENCE_THRESHOLD:
+            return 0.0, False
 
-        # Convert to cm
-        waist_cm = waist_pixels * 0.4
+        # Hips width from hip landmarks
+        hips_px = abs(right_hip['x'] - left_hip['x']) * image_shape[1]
 
-        # Apply ratio correction
-        waist_ratio = AVERAGE_HUMAN_RATIOS['waist_to_shoulder_ratio']
-        waist_cm = shoulder_width * waist_ratio
+        # Convert width to circumference
+        hips_width_cm = (hips_px / pixel_height) * user_height_cm
+        hips_cm = hips_width_cm * CIRCUMFERENCE_CONVERSION
 
-        return max(50, min(130, waist_cm))
+        return max(60, min(140, hips_cm)), True
     except Exception:
-        return 80.0  # Default fallback
+        return 0.0, False
 
 
-def calculate_hips(landmarks: list, image_shape: tuple, shoulder_width: float) -> float:
+def is_front_view(landmarks: list) -> bool:
+    """
+    STEP 6: Front view validation.
+
+    Validates front view using x/y ratio instead of z (which is noisy in MediaPipe).
+
+    Requirements:
+    - Horizontal shoulder distance > 0.15 (normalized)
+    - Vertical shoulder distance < 0.1 (normalized)
+
+    This ensures we're looking at a front view, not a side view.
+
+    Args:
+        landmarks: List of body landmarks
+
+    Returns:
+        True if front view, False if side view
+    """
+    if not landmarks or len(landmarks) < 13:
+        return False
+
+    try:
+        left_shoulder = landmarks[11]
+        right_shoulder = landmarks[12]
+
+        delta_x = abs(right_shoulder['x'] - left_shoulder['x'])
+        delta_y = abs(right_shoulder['y'] - left_shoulder['y'])
+
+        return delta_x > 0.15 and delta_y < 0.1
+    except Exception:
+        return False
+
+
+def fuse_measurements(measurements_by_angle: dict) -> tuple[dict, dict]:
+    """
+    STEP 7: Multi-angle fusion.
+
+    Collects values from all valid images, removes outliers outside ±20% of median,
+    returns median of filtered values.
+
+    Args:
+        measurements_by_angle: {
+            'front': {'chest': 100, 'waist': 80, 'shoulders': 45, 'hips': 95},
+            'left': {...},
+            'right': {...},
+            'back': {...}
+        }
+
+    Returns:
+        Tuple of (fused_measurements, debug_info)
+    """
+    fused = {}
+    debug = {
+        'valid_angles_used': 0,
+        'rejected_angles': [],
+        'angles_per_measurement': {}
+    }
+
+    measurement_keys = ['chest', 'waist', 'shoulders', 'hips']
+    valid_angles = []
+
+    for angle, measurements in measurements_by_angle.items():
+        if measurements and any(measurements.get(k, 0) > 0 for k in measurement_keys):
+            valid_angles.append(angle)
+
+    debug['valid_angles_used'] = len(valid_angles)
+
+    for measurement in measurement_keys:
+        values = []
+        angles_used = []
+
+        for angle in valid_angles:
+            measurements = measurements_by_angle.get(angle, {})
+            value = measurements.get(measurement, 0)
+            if value > 0:
+                values.append(value)
+                angles_used.append(angle)
+
+        if len(values) >= MIN_ANGLES_FOR_AVG:
+            # STEP 7: Remove outliers outside ±20% of median
+            sorted_values = sorted(values)
+            median = sorted_values[len(sorted_values) // 2]
+
+            # Filter values within ±20% of median
+            filtered = [v for v in values
+                      if abs(v - median) / median <= OUTLIER_THRESHOLD_PCT]
+
+            if filtered:
+                fused[measurement] = round(sum(filtered) / len(filtered), 1)
+            else:
+                fused[measurement] = round(median, 1)
+
+            debug['angles_per_measurement'][measurement] = angles_used
+        elif values:
+            fused[measurement] = round(values[0], 1)
+            debug['angles_per_measurement'][measurement] = angles_used
+        else:
+            fused[measurement] = 0.0
+
+    # Track rejected angles
+    all_angles = set(measurements_by_angle.keys())
+    debug['rejected_angles'] = list(all_angles - set(valid_angles))
+
+    # Consistency check: if variation > 25%, mark confidence as low
+    consistency = {}
+    for measurement in measurement_keys:
+        values = []
+        for angle, measurements in measurements_by_angle.items():
+            value = measurements.get(measurement, 0)
+            if value > 0:
+                values.append(value)
+
+        if len(values) >= 2:
+            mean_val = sum(values) / len(values)
+            max_dev = max(abs(v - mean_val) / mean_val for v in values)
+            consistency[measurement] = 'low' if max_dev > CONSISTENCY_THRESHOLD else 'high'
+        else:
+            consistency[measurement] = 'medium'
+
+    debug['consistency'] = consistency
+
+    return fused, debug
+
+
+def calculate_hips_old(landmarks: list, image_shape: tuple, shoulder_width: float) -> float:
     """
     Calculate hip measurement from pose landmarks.
 
@@ -960,16 +1322,20 @@ def calculate_measurements_calibrated(landmarks_data: dict, image_shape: tuple, 
 # ========== Enhanced Measurement Pipeline ==========
 
 def calculate_measurements_enhanced(landmarks_data: dict, image_shape: tuple,
-                                     calibration_factor: float = None) -> dict:
+                                     calibration_factor: float = None,
+                                     user_height_cm: float = DEFAULT_USER_HEIGHT_CM) -> dict:
     """
     Enhanced measurement pipeline with validation, scan classification, and confidence scoring.
 
     This is the main entry point for robust body measurements.
 
+    Uses ratio-based normalization for distance-independent measurements.
+
     Args:
         landmarks_data: Dictionary containing 'landmarks' key with landmark list
         image_shape: Shape of the original image (height, width, channels)
         calibration_factor: Optional calibration factor for accurate measurements
+        user_height_cm: User's actual height in cm for ratio-based normalization (default: 170cm)
 
     Returns:
         Dictionary with:
@@ -1047,8 +1413,28 @@ def calculate_measurements_enhanced(landmarks_data: dict, image_shape: tuple,
 
     # Calculate measurements based on scan type
     measurements = {}
+    pixel_height = 0.0
+    rejected_reasons = []
 
     try:
+        # STEP 1: Calculate pixel height using TRIMMED Y values (robust to pose variation)
+        pixel_height = calculate_pixel_height(landmarks, image_shape)
+
+        # If pixel height is too small, use fallback
+        if pixel_height < 100:
+            pixel_height = image_shape[0] * 0.8  # Fallback: 80% of image height
+
+        # STEP 1b: Validate shoulders before width-based measurements
+        shoulders_valid, shoulder_reason = validate_shoulders(landmarks, image_shape)
+        if not shoulders_valid:
+            rejected_reasons.append({'angle': 'current', 'reason': shoulder_reason})
+            # Still calculate height, but mark width measurements as invalid
+
+        # STEP 1c: Check front view for width-based measurements
+        is_front = is_front_view(landmarks)
+        if not is_front:
+            rejected_reasons.append({'angle': 'current', 'reason': 'not_front_view'})
+
         if use_calibration:
             # Use calibrated measurements
             shoulder_width = calculate_shoulder_width_calibrated(landmarks, image_shape, calibration_factor)
@@ -1066,21 +1452,58 @@ def calculate_measurements_enhanced(landmarks_data: dict, image_shape: tuple,
                 measurements['hips'] = default_measurements['hips']
                 warnings.append('Lower body not visible - height/waist/hips use estimated values')
         else:
-            # Use uncalibrated measurements with ratios
-            shoulder_width = calculate_shoulder_width(landmarks, image_shape)
-            measurements['shoulder_width'] = round(shoulder_width, 1)
-            measurements['chest'] = round(calculate_chest(landmarks, image_shape, shoulder_width), 1)
+            # STEP 2-5: Calculate all measurements using ratio-based normalization
+            # measurement_cm = (pixel_length / pixel_height) * user_height_cm
 
-            if scan_type == 'full_body':
-                measurements['height'] = round(calculate_height(landmarks, image_shape), 1)
-                measurements['waist'] = round(calculate_waist(landmarks, image_shape, shoulder_width), 1)
-                measurements['hips'] = round(calculate_hips(landmarks, image_shape, shoulder_width), 1)
+            # Use combined validation: shoulders must be valid AND front view
+            width_valid = shoulders_valid and is_front
+
+            # Shoulder width
+            if width_valid:
+                shoulder_width, _ = calculate_shoulder_width(
+                    landmarks, image_shape, pixel_height, user_height_cm
+                )
+                measurements['shoulder_width'] = round(shoulder_width, 1)
             else:
-                # Upper body only
-                measurements['height'] = default_measurements['height']
-                measurements['waist'] = default_measurements['waist']
-                measurements['hips'] = default_measurements['hips']
-                warnings.append('Lower body not visible - height/waist/hips use estimated values')
+                measurements['shoulder_width'] = 40.0
+                rejected_reasons.append({'angle': 'current', 'reason': 'width_measurement_invalid'})
+
+            # Chest (depends on shoulders)
+            if width_valid:
+                chest_cm, _ = calculate_chest(
+                    landmarks, image_shape, pixel_height, user_height_cm
+                )
+                measurements['chest'] = round(chest_cm, 1)
+            else:
+                measurements['chest'] = 95.0
+
+            # Hips (depends on hip landmarks)
+            hips_cm, hips_valid = calculate_hips(
+                landmarks, image_shape, pixel_height, user_height_cm
+            )
+            measurements['hips'] = round(hips_cm, 1) if hips_valid else 95.0
+
+            # Waist (depends on shoulders + hips)
+            if width_valid and hips_valid:
+                waist_cm, waist_visible = calculate_waist(
+                    landmarks, image_shape, pixel_height, user_height_cm
+                )
+                # Ensure waist < hips with correction factor
+                if waist_cm >= measurements['hips']:
+                    waist_cm = measurements['hips'] * 0.85  # Force waist < hips
+                measurements['waist'] = round(waist_cm, 1)
+            else:
+                measurements['waist'] = 80.0
+                if not hips_valid:
+                    rejected_reasons.append({'angle': 'current', 'reason': 'hips_not_visible'})
+
+            # Height in cm (using ratio)
+            measurements['height'] = round(user_height_cm, 1)
+
+            # Track visibility in warnings
+            if not width_valid:
+                warnings.append('Width measurements may be unreliable: shoulder or front view validation failed')
+
     except Exception as e:
         warnings.append(f'Measurement calculation warning: {str(e)}')
         measurements = default_measurements.copy()
@@ -1088,12 +1511,30 @@ def calculate_measurements_enhanced(landmarks_data: dict, image_shape: tuple,
     # Compute confidence
     confidence = compute_confidence(landmarks, scan_type, use_calibration)
 
+    # Build visibility dict (STEP 8)
+    visibility = {
+        'waist': measurements.get('waist', 0) > 0,
+        'chest': measurements.get('chest', 0) > 0,
+        'hips': measurements.get('hips', 0) > 0,
+        'shoulders': measurements.get('shoulder_width', 0) > 0
+    }
+
+    # Build debug info
+    debug_info = {
+        'height_px': pixel_height if 'pixel_height' in dir() else 0,
+        'user_height_cm': user_height_cm,
+        'valid_angles_used': 1 if not rejected_reasons else 0,
+        'rejected_angles': rejected_reasons
+    }
+
     return {
         'success': True,
         'scan_type': scan_type,
         'measurements': measurements,
+        'visibility': visibility,
         'confidence': confidence,
         'warnings': warnings,
         'missing_landmarks': missing_landmarks,
-        'can_calibrate': use_calibration
+        'can_calibrate': use_calibration,
+        'debug': debug_info
     }
