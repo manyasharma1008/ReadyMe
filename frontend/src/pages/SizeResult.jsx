@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react"
-import { useNavigate } from "react-router-dom"
+import { useEffect, useState, useRef } from "react"
+import { useNavigate, useLocation } from "react-router-dom"
 import { useApp } from "../context/AppContext"
 import { useSizePrediction } from "../hooks"
 import { saveProfile } from "../api"
@@ -9,8 +9,8 @@ import ErrorMessage from "../components/common/ErrorMessage"
 function SizeResult() {
 
   const navigate = useNavigate()
-  const { measurements, preferences, clearMeasurements, confidenceScores, warnings, scanClassification } = useApp()
-  const { recommendations, predict, loading, error, clearError } = useSizePrediction()
+  const { measurements, setMeasurements, preferences, clearMeasurements, confidenceScores, warnings, scanClassification, clearRecommendations } = useApp()
+  const { recommendations, predict, loading, error, clearError, clear: clearPrediction } = useSizePrediction()
 
   const [manualInput, setManualInput] = useState(false)
   const [manualMeasurements, setManualMeasurements] = useState({
@@ -23,12 +23,22 @@ function SizeResult() {
   const [profileSaving, setProfileSaving] = useState(false)
   const [profileSaved, setProfileSaved] = useState(false)
 
-  // Predict size when measurements are available
+  // Track if we've cleaned up recommendations for this manual session
+  const hasCleanedUpForManual = useRef(false)
+  // Track if we've initialized manual form from existing measurements
+  const hasInitializedFromScan = useRef(false)
+
+  // Check if navigated from manual entry
+  const location = useLocation()
+  const isManualMode = location.state?.manual || manualInput
+
+  // Predict size when measurements are available (skip in manual mode)
   useEffect(() => {
     console.log("SizeResult - measurements:", measurements)
     console.log("SizeResult - preferences:", preferences)
 
-    if (measurements && !recommendations) {
+    // Skip automatic prediction in manual mode - user enters their own data
+    if (measurements && !recommendations && !isManualMode) {
       // Validate measurements have valid numeric values
       const m = measurements
       const hasValidMeasurements = (
@@ -46,10 +56,43 @@ function SizeResult() {
         console.warn("Invalid measurements - not calling predict:", measurements)
       }
     }
-  }, [measurements, recommendations, predict, preferences])
+  }, [measurements, recommendations, predict, preferences, isManualMode])
+
+  // Clear stale recommendations once when entering manual mode (not on every recommendation change)
+  useEffect(() => {
+    if (isManualMode && !hasCleanedUpForManual.current) {
+      // Only clear once per manual session
+      clearRecommendations()
+      clearPrediction()
+      hasCleanedUpForManual.current = true
+    }
+    // Reset cleanup flag when leaving manual mode
+    if (!isManualMode) {
+      hasCleanedUpForManual.current = false
+    }
+  }, [isManualMode, clearRecommendations, clearPrediction])
+
+  // Pre-populate manual form when entering edit mode from scan mode
+  useEffect(() => {
+    // Only initialize when entering manual mode with existing scan measurements
+    if (isManualMode && measurements && !hasInitializedFromScan.current) {
+      setManualMeasurements({
+        height: String(measurements.height || ''),
+        chest: String(measurements.chest || ''),
+        waist: String(measurements.waist || ''),
+        hips: String(measurements.hips || ''),
+        shoulder_width: String(measurements.shoulder_width || '')
+      })
+      hasInitializedFromScan.current = true
+    }
+    // Reset flag when leaving manual mode
+    if (!isManualMode) {
+      hasInitializedFromScan.current = false
+    }
+  }, [isManualMode, measurements])
 
   // Use measurements from context or manual input
-  const displayMeasurements = manualInput ? manualMeasurements : measurements
+  const displayMeasurements = isManualMode ? manualMeasurements : measurements
 
   // Handle manual input changes
   const handleManualChange = (field, value) => {
@@ -61,14 +104,17 @@ function SizeResult() {
 
   // Submit manual measurements
   const handleManualSubmit = async () => {
-    // Convert string values to numbers
+    // Convert string values to numbers, preserving existing values for empty fields
     const numericMeasurements = {
-      height: parseFloat(manualMeasurements.height) || 0,
-      chest: parseFloat(manualMeasurements.chest) || 0,
-      waist: parseFloat(manualMeasurements.waist) || 0,
-      hips: parseFloat(manualMeasurements.hips) || 0,
-      shoulder_width: parseFloat(manualMeasurements.shoulder_width) || 0
+      height: manualMeasurements.height ? parseFloat(manualMeasurements.height) : (measurements?.height || 0),
+      chest: manualMeasurements.chest ? parseFloat(manualMeasurements.chest) : (measurements?.chest || 0),
+      waist: manualMeasurements.waist ? parseFloat(manualMeasurements.waist) : (measurements?.waist || 0),
+      hips: manualMeasurements.hips ? parseFloat(manualMeasurements.hips) : (measurements?.hips || 0),
+      shoulder_width: manualMeasurements.shoulder_width ? parseFloat(manualMeasurements.shoulder_width) : (measurements?.shoulder_width || 0)
     }
+
+    // Write to context to establish single source of truth
+    setMeasurements(numericMeasurements)
 
     await predict(numericMeasurements, {
       category: preferences.category,
@@ -95,7 +141,17 @@ function SizeResult() {
 
   // Save measurements to profile
   const handleSaveToProfile = async () => {
+    // Use measurements from context (single source of truth after handleManualSubmit writes to it)
+    // In scan mode: measurements from scan
+    // In manual mode: measurements set by handleManualSubmit
     if (!measurements) return
+
+    // Validate we have numeric values
+    const hasValidData = (
+      typeof measurements.height === 'number' && measurements.height > 0 &&
+      typeof measurements.chest === 'number' && measurements.chest > 0
+    )
+    if (!hasValidData) return
 
     setProfileSaving(true)
     try {
@@ -111,7 +167,7 @@ function SizeResult() {
   }
 
   // If no measurements and not in manual mode, show manual input form
-  if (!measurements && !manualInput) {
+  if (!measurements && !isManualMode) {
     return (
       <div className="min-h-screen bg-[#e7e3dd] flex items-center justify-center p-4">
         <div className="bg-white rounded-lg shadow-lg p-6 max-w-md w-full">
@@ -146,16 +202,15 @@ function SizeResult() {
         {/* Scan Classification Banner */}
         {scanClassification && (
           <div className={`p-4 rounded-lg mb-4 ${
-            scanClassification.type === 'full_body' ? 'bg-green-50 border-green-200' :
-            scanClassification.type === 'upper_body' ? 'bg-yellow-50 border-yellow-200' :
-            'bg-red-50 border-red-200'
+            (scanClassification.type === "full" || scanClassification.type === "full_body") ? "bg-green-50 border-green-200" :
+            (scanClassification.type === "partial" || scanClassification.type === "upper_body") ? "bg-yellow-50 border-yellow-200" :
+            "bg-red-50 border-red-200"
           } border`}>
-            {scanClassification.type === 'full_body' && "Full Body Scan ✅"}
-            {scanClassification.type === 'upper_body' && "Upper Body Scan ⚠️ Limited Accuracy"}
-            {scanClassification.type === 'invalid' && "Invalid Scan ❌ Retake Required"}
+            {(scanClassification.type === "full" || scanClassification.type === "full_body") && "Full Body Scan (High Confidence)"}
+            {(scanClassification.type === "partial" || scanClassification.type === "upper_body") && "Partial Scan (Limited Accuracy)"}
+            {scanClassification.type === "invalid" && "Invalid Scan (Retake Required)"}
           </div>
         )}
-
         {/* Warnings Box */}
         {warnings && warnings.length > 0 && (
           <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-4">
@@ -169,7 +224,7 @@ function SizeResult() {
         <div className="bg-white rounded-lg shadow-lg p-6 mb-6">
           <h3 className="text-lg font-medium mb-4">Your Measurements</h3>
 
-          {manualInput ? (
+          {isManualMode ? (
             // Manual input form
             <div className="grid grid-cols-2 gap-4">
               {[
@@ -216,7 +271,7 @@ function SizeResult() {
           )}
 
           {/* Edit button */}
-          {!manualInput && measurements && (
+          {!isManualMode && measurements && (
             <button
               onClick={() => setManualInput(true)}
               className="mt-4 text-sm text-clay underline"
@@ -319,6 +374,9 @@ const getConfidenceColor = (score) => {
  * Measurement display card
  */
 function MeasurementCard({ label, value, unit, confidence }) {
+  // Show "User confirmed" for height when confidence is 100%
+  const isUserConfirmed = label === 'Height' && confidence === 1.0
+
   return (
     <div className="bg-gray-50 rounded-lg p-3">
       <p className="text-xs text-gray-500 uppercase tracking-wide">{label}</p>
@@ -328,7 +386,7 @@ function MeasurementCard({ label, value, unit, confidence }) {
       </p>
       {confidence !== undefined && (
         <p className={`text-xs ${getConfidenceColor(confidence)}`}>
-          {Math.round(confidence * 100)}% confidence
+          {isUserConfirmed ? 'User confirmed' : `${Math.round(confidence * 100)}% confidence`}
         </p>
       )}
     </div>

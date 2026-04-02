@@ -38,9 +38,16 @@ export async function scanMeasureBase64(base64String) {
 /**
  * Enhanced body measurement with validation, scan classification, and confidence scoring
  */
-export async function scanMeasureEnhanced(base64String) {
+export async function scanMeasureEnhanced(base64String, userHeightCm = null) {
   const base64 = base64String.includes(",") ? base64String.split(",")[1] : base64String;
-  return apiPost(ENDPOINTS.SCAN_MEASURE_ENHANCED, { image_data: base64 });
+
+  // Only include user_height_cm if we have a valid numeric value
+  const body = { image_data: base64 };
+  if (typeof userHeightCm === 'number' && userHeightCm >= 100 && userHeightCm <= 250) {
+    body.user_height_cm = userHeightCm;
+  }
+
+  return apiPost(ENDPOINTS.SCAN_MEASURE_ENHANCED, body);
 }
 
 /**
@@ -65,10 +72,14 @@ export async function scanImage(source) {
  */
 export async function scanMeasureCalibrated(base64String, userHeightCm) {
   const base64 = base64String.includes(",") ? base64String.split(",")[1] : base64String;
-  return apiPost(ENDPOINTS.SCAN_MEASURE_CALIBRATED, {
-    image_data: base64,
-    user_height_cm: userHeightCm,
-  });
+
+  // Only include user_height_cm if we have a valid numeric value
+  const body = { image_data: base64 };
+  if (typeof userHeightCm === 'number' && userHeightCm >= 100 && userHeightCm <= 250) {
+    body.user_height_cm = userHeightCm;
+  }
+
+  return apiPost(ENDPOINTS.SCAN_MEASURE_CALIBRATED, body);
 }
 
 /**
@@ -88,10 +99,13 @@ export async function scanMeasureMultiple(images, userHeightCm = null) {
   // Use 120 second timeout for processing 4 images
   const EXTENDED_TIMEOUT = 120000;
 
-  return apiPost(ENDPOINTS.SCAN_MEASURE_MULTIPLE, {
-    images: imagesData,
-    user_height_cm: userHeightCm,
-  }, EXTENDED_TIMEOUT);
+  // Only include user_height_cm if we have a valid numeric value
+  const body = { images: imagesData };
+  if (typeof userHeightCm === 'number' && userHeightCm >= 100 && userHeightCm <= 250) {
+    body.user_height_cm = userHeightCm;
+  }
+
+  return apiPost(ENDPOINTS.SCAN_MEASURE_MULTIPLE, body, EXTENDED_TIMEOUT);
 }
 
 /**
@@ -99,12 +113,18 @@ export async function scanMeasureMultiple(images, userHeightCm = null) {
  */
 export async function visualizeLandmarks(base64String, userHeightCm = null, showOutline = true, showInfo = true) {
   const base64 = base64String.includes(",") ? base64String.split(",")[1] : base64String;
-  return apiPost(ENDPOINTS.SCAN_VISUALIZE, {
+
+  // Only include user_height_cm if we have a valid numeric value
+  const body = {
     image_data: base64,
-    user_height_cm: userHeightCm,
     show_outline: showOutline,
     show_info: showInfo,
-  });
+  };
+  if (typeof userHeightCm === 'number' && userHeightCm >= 100 && userHeightCm <= 250) {
+    body.user_height_cm = userHeightCm;
+  }
+
+  return apiPost(ENDPOINTS.SCAN_VISUALIZE, body);
 }
 
 /**

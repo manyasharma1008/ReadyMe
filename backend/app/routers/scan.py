@@ -58,7 +58,8 @@ class MeasureWithCalibrationRequest(BaseModel):
 class MeasureBase64Request(BaseModel):
     """Request model for base64 image measurement."""
     image_data: str = Field(..., description="Base64 encoded image data")
-    user_height: float = Field(DEFAULT_USER_HEIGHT_CM, description="User's actual height in cm")
+    user_height: float | None = Field(None, description="User's actual height in cm")
+    user_height_cm: float | None = Field(None, description="User's actual height in cm")
 
 
 class VisualizationResponse(BaseModel):
@@ -133,6 +134,22 @@ def _safe_extract_landmarks(image_array: np.ndarray) -> dict:
         return {"landmarks": []}
 
 
+def _resolve_user_height_cm(payload: object | None) -> float:
+    """Resolve user height from either `user_height_cm` or legacy `user_height` fields."""
+    if payload is None:
+        return DEFAULT_USER_HEIGHT_CM
+
+    height_cm = getattr(payload, "user_height_cm", None)
+    if isinstance(height_cm, (int, float)) and height_cm > 0:
+        return float(height_cm)
+
+    legacy_height = getattr(payload, "user_height", None)
+    if isinstance(legacy_height, (int, float)) and legacy_height > 0:
+        return float(legacy_height)
+
+    return DEFAULT_USER_HEIGHT_CM
+
+
 @router.post("/measure", response_model=ScanMeasureResponse)
 async def measure_body(
     image: UploadFile = File(...),
@@ -175,10 +192,14 @@ async def measure_body(
             user_height_cm=user_height
         )
 
+        measurements = None
+        if result.get('success') and result.get('measurements'):
+            measurements = BodyMeasurements(**result.get('measurements', {}))
+
         return ScanMeasureResponse(
             success=result.get('success', False),
-            measurements=BodyMeasurements(**result.get('measurements', {})),
-            message="Measurements extracted successfully",
+            measurements=measurements,
+            message="Measurements extracted successfully" if result.get('success') else "Measurement failed",
             landmarks=landmarks.get('landmarks', [])
         )
 
@@ -201,7 +222,7 @@ async def measure_body_base64(payload: MeasureBase64Request):
     """
     try:
         image_data = payload.image_data
-        user_height = payload.user_height
+        user_height = _resolve_user_height_cm(payload)
 
         if not image_data:
             return ScanMeasureResponse(
@@ -248,10 +269,14 @@ async def measure_body_base64(payload: MeasureBase64Request):
             user_height_cm=user_height
         )
 
+        measurements = None
+        if result.get('success') and result.get('measurements'):
+            measurements = BodyMeasurements(**result.get('measurements', {}))
+
         return ScanMeasureResponse(
             success=result.get('success', False),
-            measurements=BodyMeasurements(**result.get('measurements', {})),
-            message="Measurements extracted successfully",
+            measurements=measurements,
+            message="Measurements extracted successfully" if result.get('success') else "Measurement failed",
             landmarks=landmarks.get('landmarks', [])
         )
 
@@ -279,6 +304,18 @@ async def measure_body_enhanced(payload: MeasureBase64Request):
     try:
         # Decode base64 image
         image_array = _safe_decode_image(payload.image_data)
+
+        if image_array is None:
+            return ScanMeasureResponseV2(
+                success=False,
+                scan_type="invalid",
+                measurements=None,
+                confidence=None,
+                warnings=["Invalid base64 image data"],
+                missing_landmarks=["image"],
+                message="Invalid image",
+                landmarks=[]
+            )
 
         if image_array.size == 0:
             return ScanMeasureResponseV2(
@@ -308,7 +345,12 @@ async def measure_body_enhanced(payload: MeasureBase64Request):
             )
 
         # Calculate enhanced measurements with validation
-        result = calculate_measurements_enhanced(landmarks, image_array.shape)
+        user_height = _resolve_user_height_cm(payload)
+        result = calculate_measurements_enhanced(
+            landmarks,
+            image_array.shape,
+            user_height_cm=user_height
+        )
 
         # Build response
         measurements = None
@@ -642,7 +684,7 @@ async def measure_multiple_images(payload: MeasureMultipleRequest):
     Removes outliers outside ±20% of median, returns median of filtered values.
     """
     try:
-        user_height = payload.user_height_cm if payload.user_height_cm else DEFAULT_USER_HEIGHT_CM
+        user_height = _resolve_user_height_cm(payload)
 
         image_types = ['front', 'back', 'left', 'right']
         all_landmarks = {}
@@ -692,15 +734,16 @@ async def measure_multiple_images(payload: MeasureMultipleRequest):
 
             # Calculate measurements for this image using enhanced method with ratio-based normalization
             enhanced_result = calculate_measurements_enhanced(
-                landmarks,
+                landmarks_data,
                 image_array.shape,
                 user_height_cm=user_height
             )
-            measurements = enhanced_result.get('measurements', {})
+            measurements = enhanced_result.get('measurements', {}) if enhanced_result.get('success') else {}
 
             # Store for aggregation
             all_landmarks[img_type] = landmarks
-            all_measurements[img_type] = measurements
+            if measurements:
+                all_measurements[img_type] = measurements
 
             # Store enhanced data from front image for response
             if img_type == 'front':
@@ -710,8 +753,8 @@ async def measure_multiple_images(payload: MeasureMultipleRequest):
                 image_type=img_type,
                 image_data=image_data,
                 landmarks=landmarks,
-                success=True,
-                message="Processed successfully"
+                success=enhanced_result.get('success', False),
+                message="Processed successfully" if enhanced_result.get('success') else "; ".join(enhanced_result.get('warnings', [])) or "Measurement validation failed"
             ))
 
         # STEP 7: Multi-angle fusion - combine measurements from all valid angles

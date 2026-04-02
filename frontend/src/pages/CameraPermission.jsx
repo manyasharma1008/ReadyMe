@@ -9,7 +9,7 @@ export default function CameraPermission() {
   }
 
   const handleManualEntry = () => {
-    navigate("/size-result")
+    navigate("/size-result", { state: { manual: true } })
   }
 
   return (
