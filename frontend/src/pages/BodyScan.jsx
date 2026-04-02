@@ -7,6 +7,34 @@ import { scanMeasureEnhanced, scanMeasureMultiple } from "../api"
 import LoadingSpinner from "../components/common/LoadingSpinner"
 import ErrorMessage from "../components/common/ErrorMessage"
 
+// Validation utility
+const isValidHeight = (h) => {
+  const num = Number(h)
+  return num >= 100 && num <= 250
+}
+
+const CONFIDENCE_THRESHOLD = 0.5
+const MEASUREMENT_KEYS = ["height", "chest", "waist", "hips", "shoulder_width"]
+const RELIABLE_MEASUREMENT_KEYS = ["chest", "waist", "hips", "shoulder_width"]
+
+const getConfirmedHeightCm = (heightValue, confirmed) => {
+  if (!confirmed || !isValidHeight(heightValue)) return null
+  return parseFloat(heightValue)
+}
+
+const getKeypointsDetected = (response) => {
+  if (!response) return 0
+  if (typeof response.keypoints_detected === "number") return response.keypoints_detected
+  if (Array.isArray(response.landmarks)) return response.landmarks.length
+  if (Array.isArray(response.keypoints)) return response.keypoints.length
+  return 0
+}
+
+// Clear cached height from localStorage
+const clearHeight = () => {
+  localStorage.removeItem("userHeight")
+}
+
 // Landmark indices from MediaPipe Pose
 const LANDMARK_INDICES = {
   nose: 0,
@@ -186,6 +214,7 @@ function BodyScan() {
   const canvasRef = useRef(null)
   const overlayCanvasRef = useRef(null)
   const streamRef = useRef(null)
+  const landmarksRef = useRef(null)
   const navigate = useNavigate()
 
   const [step, setStep] = useState(1)
@@ -193,6 +222,8 @@ function BodyScan() {
   const [capturedImagesMap, setCapturedImagesMap] = useState({ front: null, left: null, right: null, back: null })
   const [userHeight, setUserHeight] = useState("")
   const [showHeightInput, setShowHeightInput] = useState(true)
+  const [hasCachedHeight, setHasCachedHeight] = useState(false)
+  const [heightConfirmed, setHeightConfirmed] = useState(false)
   const [visualizationImage, setVisualizationImage] = useState(null)
   const [showVisualization, setShowVisualization] = useState(false)
   const [currentLandmarks, setCurrentLandmarks] = useState(null)
@@ -228,6 +259,20 @@ function BodyScan() {
     "Turn your back to the camera"
   ]
 
+  // Load saved height from localStorage on mount (as suggestion, not source of truth)
+  useEffect(() => {
+    const savedHeight = localStorage.getItem('userHeight')
+    if (savedHeight && isValidHeight(savedHeight)) {
+      // Pre-fill but DO NOT hide input - require explicit confirmation
+      setUserHeight(savedHeight)
+      setHasCachedHeight(true)
+    } else if (savedHeight) {
+      // Invalid cached value - clear it
+      clearHeight()
+    }
+    // Always show height input for user confirmation
+  }, [])
+
   // Start real-time landmark detection when video is ready
   useEffect(() => {
     if (!mediapipeLoaded || !videoRef.current) return
@@ -238,13 +283,18 @@ function BodyScan() {
     const handleLoadedMetadata = () => {
       // Start continuous detection
       startDetection(video, (landmarks) => {
+        const liveLandmarks = landmarks && landmarks.length > 0 ? landmarks : null
+        landmarksRef.current = liveLandmarks
         // Update current landmarks state for display
-        if (landmarks && landmarks.length > 0 && overlayCanvasRef.current) {
-          setCurrentLandmarks(landmarks)
+        setCurrentLandmarks(liveLandmarks)
+        if (liveLandmarks && overlayCanvasRef.current) {
           // Draw in real-time mode (showLandmarks = true during preview)
           if (showLandmarks) {
-            drawLandmarksOnCanvas(overlayCanvasRef.current, video, landmarks, video.videoWidth || 520, video.videoHeight || 300)
+            drawLandmarksOnCanvas(overlayCanvasRef.current, video, liveLandmarks, video.videoWidth || 520, video.videoHeight || 300)
           }
+        } else if (overlayCanvasRef.current) {
+          const ctx = overlayCanvasRef.current.getContext('2d')
+          ctx.clearRect(0, 0, overlayCanvasRef.current.width, overlayCanvasRef.current.height)
         }
       })
     }
@@ -254,16 +304,22 @@ function BodyScan() {
     // If video already loaded
     if (video.readyState >= 1) {
       startDetection(video, (landmarks) => {
-        if (landmarks && landmarks.length > 0 && overlayCanvasRef.current) {
-          setCurrentLandmarks(landmarks)
+        const liveLandmarks = landmarks && landmarks.length > 0 ? landmarks : null
+        landmarksRef.current = liveLandmarks
+        setCurrentLandmarks(liveLandmarks)
+        if (liveLandmarks && overlayCanvasRef.current) {
           // Always draw landmarks in real-time
-          drawLandmarksOnCanvas(overlayCanvasRef.current, video, landmarks, video.videoWidth || 520, video.videoHeight || 300)
+          drawLandmarksOnCanvas(overlayCanvasRef.current, video, liveLandmarks, video.videoWidth || 520, video.videoHeight || 300)
+        } else if (overlayCanvasRef.current) {
+          const ctx = overlayCanvasRef.current.getContext('2d')
+          ctx.clearRect(0, 0, overlayCanvasRef.current.width, overlayCanvasRef.current.height)
         }
       })
     }
 
     return () => {
       video.removeEventListener('loadedmetadata', handleLoadedMetadata)
+      landmarksRef.current = null
       stopDetection()
     }
   }, [mediapipeLoaded, startDetection, stopDetection])
@@ -303,6 +359,7 @@ function BodyScan() {
       streamRef.current.getTracks().forEach(track => track.stop())
       streamRef.current = null
     }
+    landmarksRef.current = null
   }
 
   const captureFrame = useCallback(() => {
@@ -328,243 +385,17 @@ function BodyScan() {
     4: 'back'
   }
 
+  const logCaptureStage = useCallback((stage, data = {}) => {
+    console.log("[BodyScan capture]", {
+      stage,
+      timestamp: new Date().toISOString(),
+      ...data,
+    })
+  }, [])
+
   const handleCapture = async () => {
-    // If already counting down or loading, don't start a new capture
-    if (countingDown || loading) return
-
-    // Start countdown: 3 -> 2 -> 1 -> capture
-    setCountingDown(true)
-    setCountdownNumber(3)
-
-    // Countdown sequence
-    for (let i = 3; i > 0; i--) {
-      setCountdownNumber(i)
-      await new Promise(resolve => setTimeout(resolve, 1000))
-    }
-    setCountingDown(false)
-
-    // Now perform the actual capture
-    clearError()
-    setShowVisualization(false)
-    setVisualizationImage(null)
-    setMultiScanResults(null)
-
-    // Keep showing landmarks during scanning
-    setShowLandmarks(true)
-
-    const imageData = captureFrame()
-    if (!imageData) return
-
-    // Store image with its type (front, left, right, back)
-    const imageType = stepToImageType[step]
-    setCapturedImagesMap(prev => ({
-      ...prev,
-      [imageType]: imageData
-    }))
-
-    const newImages = [...capturedImages, imageData]
-    setCapturedImages(newImages)
-
-    if (step < 4) {
-      setStep(step + 1)
-    } else {
-      // Stop real-time detection when done
-      stopDetection()
-      stopCamera()
-
-      // All 4 images captured - call measure-multiple
-      const imagesToSend = {
-        front: capturedImagesMap.front || newImages[0],
-        left: capturedImagesMap.left || newImages[1],
-        right: capturedImagesMap.right || newImages[2],
-        back: capturedImagesMap.back || newImages[3]
-      }
-
-      // Clear any previous errors
-      setLocalError(null)
-      clearError()
-      setMultiLoading(true)
-
-      try {
-        // STEP 1: SAFE BASE64 NORMALIZATION
-        const normalizeToBase64 = async (img) => {
-          if (!img) return null;
-          if (typeof img === "string") {
-            return img.includes(",") ? img.split(",")[1] : img;
-          }
-          return new Promise((resolve, reject) => {
-            const reader = new FileReader();
-            reader.readAsDataURL(img);
-            reader.onload = () => {
-              const result = reader.result;
-              const base64 = result.split(",")[1];
-              resolve(base64);
-            };
-            reader.onerror = reject;
-          });
-        };
-
-        // STEP 2: CONVERT ALL IMAGES
-        const base64Images = {
-          front: await normalizeToBase64(imagesToSend.front),
-          back: await normalizeToBase64(imagesToSend.back),
-          left: await normalizeToBase64(imagesToSend.left),
-          right: await normalizeToBase64(imagesToSend.right),
-        };
-
-        // Safety check
-        const base64Values = Object.values(base64Images).filter(Boolean);
-        if (base64Values.length === 0 || !base64Values.every(v => typeof v === "string")) {
-          setLocalError("Image conversion failed. Please try again.");
-          setMultiLoading(false);
-          return;
-        }
-
-        console.log("ENHANCED PIPELINE ACTIVE ✅");
-        console.log("Base64 Images prepared:", Object.keys(base64Images));
-
-        // STEP 3: CALL ENHANCED ENDPOINT (PARALLEL)
-        const heightVal = parseFloat(userHeight);
-        const heightParam =
-          userHeight && heightVal > 100 && heightVal < 250 ? heightVal : null;
-
-        const responses = await Promise.all([
-          base64Images.front
-            ? scanMeasureEnhanced(base64Images.front, heightParam)
-            : null,
-          base64Images.back
-            ? scanMeasureEnhanced(base64Images.back, heightParam)
-            : null,
-          base64Images.left
-            ? scanMeasureEnhanced(base64Images.left, heightParam)
-            : null,
-          base64Images.right
-            ? scanMeasureEnhanced(base64Images.right, heightParam)
-            : null,
-        ]);
-
-        // FIX 5: LOG EACH ANGLE (DEBUG GOLD)
-        responses.forEach((r, i) => {
-          console.log(`Response ${i}:`, r);
-        });
-
-        setMultiLoading(false)
-
-        // STEP 4: SAFE RESPONSE FILTERING
-        const validResponses = responses.filter(
-          (r) => r && r.measurements && Object.keys(r.measurements).length > 0
-        );
-
-        // FIX 2: HANDLE NO VALID RESPONSES
-        if (validResponses.length === 0) {
-          console.error("No valid scan responses ❌");
-
-          setScanClassification({ type: "invalid", confidence: 0 });
-          setWarnings(["Scan failed. Please ensure full body is visible and try again."]);
-          setConfidenceScores({});
-
-          return;
-        }
-
-        // STEP 5: COMBINE CLASSIFICATION
-        const scanTypes = validResponses.map(r => r.scan_type);
-        let finalScanType = "invalid";
-        if (scanTypes.includes("full_body")) {
-          finalScanType = "full_body";
-        } else if (scanTypes.includes("upper_body")) {
-          finalScanType = "upper_body";
-        }
-
-        // STEP 6: COMBINE WARNINGS (FIX 3: DEDUPLICATE)
-        const warnings = [
-          ...new Set(validResponses.flatMap(r => r.warnings || []))
-        ];
-
-        // STEP 7: COMBINE CONFIDENCE (FIX 4: SAFE AVERAGING)
-        const confidenceList = validResponses.map(r => r.confidence || {});
-        const combinedConfidence = {};
-
-        confidenceList.forEach(conf => {
-          Object.keys(conf).forEach(key => {
-            if (!combinedConfidence[key]) combinedConfidence[key] = [];
-            if (typeof conf[key] === "number") {
-              combinedConfidence[key].push(conf[key]);
-            }
-          });
-        });
-
-        Object.keys(combinedConfidence).forEach(key => {
-          const values = combinedConfidence[key];
-          if (values.length > 0) {
-            combinedConfidence[key] =
-              values.reduce((a, b) => a + b, 0) / values.length;
-          } else {
-            combinedConfidence[key] = 0;
-          }
-        });
-
-        // STEP 8: COMBINE MEASUREMENTS (average all valid)
-        const measurementsList = validResponses.map(r => r.measurements);
-        const finalMeasurements = {
-          height: 0,
-          chest: 0,
-          waist: 0,
-          hips: 0,
-          shoulder_width: 0,
-        };
-
-        const measurementKeys = ["height", "chest", "waist", "hips", "shoulder_width"];
-        measurementKeys.forEach(key => {
-          const values = measurementsList
-            .map(m => m[key])
-            .filter(v => typeof v === "number" && v > 0);
-          if (values.length > 0) {
-            finalMeasurements[key] = values.reduce((a, b) => a + b, 0) / values.length;
-          }
-        });
-
-        // Debug logs
-        console.log("Final Type:", finalScanType);
-        console.log("Confidence:", combinedConfidence);
-        console.log("Warnings:", warnings);
-        console.log("Final Measurements:", finalMeasurements);
-
-        // STEP 9: SET STATE (FIX 6: BETTER CLASSIFICATION CONFIDENCE)
-        setScanClassification({
-          type: finalScanType,
-          confidence:
-            combinedConfidence.overall ||
-            Math.max(...Object.values(combinedConfidence), 0)
-        });
-
-        setWarnings(warnings);
-        setConfidenceScores(combinedConfidence);
-        setMeasurements(finalMeasurements);
-
-        // Handle invalid scans
-        if (finalScanType === 'invalid') {
-          setLocalError("Scan failed. Please ensure full body is visible and try again.")
-          return
-        }
-
-        // Validate final measurements
-        if (!finalMeasurements || finalMeasurements.height <= 0) {
-          setLocalError("Invalid measurements returned")
-          return
-        }
-
-        // Navigate after 3.5 seconds
-        setTimeout(() => {
-          navigate("/size-result")
-        }, 3500)
-
-      } catch (err) {
-        console.error("Scan error:", err)
-        setLocalError(err.message || "An error occurred during scanning")
-      }
-    }
+    await startAutoCapture()
   }
-
   // Automated multi-capture function - captures 4 images with countdowns
   const startAutoCapture = async () => {
     if (isCapturing || countingDown || loading) return
@@ -584,6 +415,10 @@ function BodyScan() {
     for (let i = 0; i < 4; i++) {
       setCurrentCaptureStep(i + 1)
       setStep(i + 1)
+      logCaptureStage("step-start", {
+        step: i + 1,
+        hasLandmarks: !!landmarksRef.current,
+      })
 
       // Show "turn to next pose" message for steps 2-4
       if (i > 0) {
@@ -597,7 +432,11 @@ function BodyScan() {
       }
 
       // Safety check: ensure landmarks exist before capture
-      if (!currentLandmarks || currentLandmarks.length === 0) {
+      if (!landmarksRef.current || landmarksRef.current.length === 0) {
+        logCaptureStage("step-failed-no-landmarks-before-countdown", {
+          step: i + 1,
+          hasLandmarks: !!landmarksRef.current,
+        })
         setLocalError("Please stand properly in frame")
         setIsCapturing(false)
         setCountingDown(false)
@@ -611,8 +450,26 @@ function BodyScan() {
         await new Promise(resolve => setTimeout(resolve, 1000))
       }
       setCountingDown(false)
+      logCaptureStage("countdown-complete", {
+        step: i + 1,
+        hasLandmarks: !!landmarksRef.current,
+      })
+
+      if (!landmarksRef.current || landmarksRef.current.length === 0) {
+        logCaptureStage("step-failed-no-landmarks-before-capture", {
+          step: i + 1,
+          hasLandmarks: !!landmarksRef.current,
+        })
+        setLocalError("Pose lost during capture. Please retake scan.")
+        setIsCapturing(false)
+        return
+      }
 
       // Capture frame
+      logCaptureStage("capture-frame", {
+        step: i + 1,
+        hasLandmarks: !!landmarksRef.current,
+      })
       const imageData = captureFrame()
       if (!imageData) {
         setLocalError("Failed to capture image")
@@ -648,7 +505,6 @@ function BodyScan() {
       return
     }
 
-    // Build images object
     const imagesToSend = {
       front: imagesMapArg.front,
       left: imagesMapArg.left,
@@ -661,7 +517,6 @@ function BodyScan() {
     setMultiLoading(true)
 
     try {
-      // Normalize to base64
       const normalizeToBase64 = async (img) => {
         if (!img) return null
         if (typeof img === "string") {
@@ -686,7 +541,6 @@ function BodyScan() {
         right: await normalizeToBase64(imagesToSend.right),
       }
 
-      // Safety check
       const base64Values = Object.values(base64Images).filter(Boolean)
       if (base64Values.length === 0 || !base64Values.every(v => typeof v === "string")) {
         setLocalError("Image conversion failed. Please try again.")
@@ -694,20 +548,10 @@ function BodyScan() {
         return
       }
 
-      console.log("ENHANCED PIPELINE ACTIVE ✅")
-      console.log("Base64 Images prepared:", Object.keys(base64Images))
-      console.log("Image lengths:", {
-        front: base64Images.front?.length,
-        back: base64Images.back?.length,
-        left: base64Images.left?.length,
-        right: base64Images.right?.length,
-      })
+      const confirmedHeightCm = getConfirmedHeightCm(userHeight, heightConfirmed)
+      const heightParam = confirmedHeightCm
+      console.log("Height confirmation:", { heightConfirmed, confirmedHeightCm })
 
-      // Call measure-multiple endpoint (returns images with landmarks for 2x2 grid)
-      const heightVal = parseFloat(userHeight)
-      const heightParam = userHeight && heightVal > 100 && heightVal < 250 ? heightVal : null
-
-      // First, get measurements from each image individually (like original manual flow)
       const responses = await Promise.all([
         base64Images.front ? scanMeasureEnhanced(base64Images.front, heightParam) : null,
         base64Images.back ? scanMeasureEnhanced(base64Images.back, heightParam) : null,
@@ -716,70 +560,42 @@ function BodyScan() {
       ])
 
       console.log("Individual responses:", responses)
+      console.log(
+        "Keypoints detected:",
+        responses.map((response, index) => ({
+          index,
+          keypoints: getKeypointsDetected(response),
+          scan_type: response?.scan_type || null,
+        }))
+      )
 
-      setMultiLoading(false)
-
-      // Filter valid responses
       const validResponses = responses.filter(
         (r) => r && r.measurements && Object.keys(r.measurements).length > 0
       )
 
       if (validResponses.length === 0) {
-        console.error("No valid scan responses ❌")
+        logCaptureStage("scan-failed-no-valid-measurements", {
+          responsesReceived: responses.filter(Boolean).length,
+        })
         setScanClassification({ type: "invalid", confidence: 0 })
-        setWarnings(["Scan failed. Please ensure full body is visible and try again."])
+        setWarnings(["No measurements detected. Please retake scan."])
         setConfidenceScores({})
+        setMultiLoading(false)
+        setLocalError("No measurements detected. Please retake scan.")
         return
       }
 
-      // Now get visualization data from measure-multiple for the 2x2 grid
       const visResponse = await scanMeasureMultiple(base64Images, heightParam)
-
-      // Set multiScanResults for 2x2 grid display (from visualize endpoint)
       if (visResponse && visResponse.images) {
         setMultiScanResults({ images: visResponse.images })
       }
 
-      console.log("Valid responses count:", validResponses.length)
+      const warnings = validResponses.length > 0
+        ? [...new Set(validResponses.flatMap(r => r.warnings || []))]
+        : ["Scan failed. Please ensure full body is visible and try again."]
 
-      // Combine measurements from all valid responses
-      const measurementsList = validResponses.map(r => r.measurements)
-      const finalMeasurements = {
-        height: 0,
-        chest: 0,
-        waist: 0,
-        hips: 0,
-        shoulder_width: 0,
-      }
-
-      const measurementKeys = ["height", "chest", "waist", "hips", "shoulder_width"]
-      measurementKeys.forEach(key => {
-        const values = measurementsList
-          .map(m => m[key])
-          .filter(v => typeof v === "number" && v > 0)
-        if (values.length > 0) {
-          finalMeasurements[key] = values.reduce((a, b) => a + b, 0) / values.length
-        }
-      })
-
-      console.log("Final measurements:", finalMeasurements)
-
-      // Combine scan types
-      const scanTypes = validResponses.map(r => r.scan_type)
-      let finalScanType = "invalid"
-      if (scanTypes.includes("full_body")) {
-        finalScanType = "full_body"
-      } else if (scanTypes.includes("upper_body")) {
-        finalScanType = "upper_body"
-      }
-
-      // Combine warnings
-      const warnings = [...new Set(validResponses.flatMap(r => r.warnings || []))]
-
-      // Combine confidence
       const confidenceList = validResponses.map(r => r.confidence || {})
       const combinedConfidence = {}
-
       confidenceList.forEach(conf => {
         Object.keys(conf).forEach(key => {
           if (!combinedConfidence[key]) combinedConfidence[key] = []
@@ -791,56 +607,115 @@ function BodyScan() {
 
       Object.keys(combinedConfidence).forEach(key => {
         const values = combinedConfidence[key]
+        combinedConfidence[key] = values.length > 0
+          ? values.reduce((a, b) => a + b, 0) / values.length
+          : 0
+      })
+
+      const finalMeasurements = {
+        height: 0,
+        chest: 0,
+        waist: 0,
+        hips: 0,
+        shoulder_width: 0,
+      }
+
+      MEASUREMENT_KEYS.forEach((key) => {
+        const values = validResponses
+          .map(r => r.measurements?.[key])
+          .filter(v => typeof v === "number" && v > 0)
         if (values.length > 0) {
-          combinedConfidence[key] = values.reduce((a, b) => a + b, 0) / values.length
-        } else {
-          combinedConfidence[key] = 0
+          finalMeasurements[key] = values.reduce((a, b) => a + b, 0) / values.length
         }
       })
 
+      const finalConfidence = { ...combinedConfidence }
+      if (confirmedHeightCm !== null) {
+        finalMeasurements.height = confirmedHeightCm
+        finalConfidence.height = 1.0
+      }
+
+      const excludedMeasurements = []
+      MEASUREMENT_KEYS.forEach((key) => {
+        if (key === "height" && confirmedHeightCm !== null) return
+        const score = finalConfidence[key]
+        if (typeof score === "number" && score < CONFIDENCE_THRESHOLD) {
+          finalMeasurements[key] = 0
+          excludedMeasurements.push(key)
+        }
+      })
+      if (excludedMeasurements.length > 0) {
+        console.log("Excluded low-confidence measurements:", excludedMeasurements)
+      }
+
+      const reliableMeasurementCount = RELIABLE_MEASUREMENT_KEYS.filter((key) => {
+        const score = finalConfidence[key]
+        return typeof score === "number" && score >= CONFIDENCE_THRESHOLD && finalMeasurements[key] > 0
+      }).length
+      if (reliableMeasurementCount < 2) {
+        setMultiLoading(false)
+        setLocalError("Fewer than two reliable measurements were detected. Please retake scan.")
+        return
+      }
+
+      let finalScanType = "invalid"
+      const scanTypes = validResponses.map(r => r.scan_type)
+      if (scanTypes.includes("full_body")) {
+        finalScanType = "full"
+      } else if (scanTypes.includes("upper_body")) {
+        finalScanType = "partial"
+      }
+
+      const classificationConfidence =
+        finalConfidence.overall || Math.max(...Object.values(finalConfidence), 0)
+
       console.log("Final Type:", finalScanType)
-      console.log("Confidence:", combinedConfidence)
+      console.log("Confidence:", finalConfidence)
       console.log("Warnings:", warnings)
       console.log("Final Measurements:", finalMeasurements)
+      console.log("Height used for calibration:", confirmedHeightCm)
 
-      // Set state
-      setScanClassification({
-        type: finalScanType,
-        confidence: combinedConfidence.overall || Math.max(...Object.values(combinedConfidence), 0)
-      })
-
+      setScanClassification({ type: finalScanType, confidence: classificationConfidence })
       setWarnings(warnings)
-      setConfidenceScores(combinedConfidence)
-      setMeasurements(finalMeasurements)
+      setConfidenceScores(finalConfidence)
 
-      // Handle invalid scans
       if (finalScanType === "invalid") {
+        setMultiLoading(false)
         setLocalError("Scan failed. Please ensure full body is visible and try again.")
         return
       }
 
-      // Validate final measurements
-      console.log("Validating measurements - height:", finalMeasurements?.height)
       if (!finalMeasurements || finalMeasurements.height <= 0) {
-        console.error("Measurements validation failed:", finalMeasurements)
+        setMultiLoading(false)
         setLocalError("Invalid measurements returned - please try again with better lighting")
         return
       }
 
-      // Navigate after 3.5 seconds
+      setMeasurements(finalMeasurements)
+      setMultiLoading(false)
+
       setTimeout(() => {
         navigate("/size-result")
       }, 3500)
 
     } catch (err) {
       console.error("Scan error:", err)
+      setMultiLoading(false)
       setLocalError(err.message || "An error occurred during scanning")
+    }
+  }
+  // Save height to localStorage only if valid, then proceed
+  const handleHeightConfirm = () => {
+    if (isValidHeight(userHeight)) {
+      localStorage.setItem('userHeight', userHeight)
+      setHeightConfirmed(true)
+      setShowHeightInput(false)
     }
   }
 
   const handleSkipToManual = () => {
     stopCamera()
-    navigate("/size-result")
+    navigate("/size-result", { state: { manual: true } })
   }
 
   return (
@@ -870,23 +745,55 @@ function BodyScan() {
           <p className="text-sm text-gray-600 mb-2">
             For accurate measurements, enter your height:
           </p>
+          {hasCachedHeight && (
+            <p className="text-xs text-blue-600 mb-2">
+              Previously used height: {userHeight} cm - You can edit before confirming
+            </p>
+          )}
           <div className="flex gap-2 justify-center items-center">
             <input
               type="number"
               placeholder="Your height (cm)"
               value={userHeight}
-              onChange={(e) => setUserHeight(e.target.value)}
+              onChange={(e) => {
+                setUserHeight(e.target.value)
+                setHeightConfirmed(false)
+              }}
               className="border rounded px-3 py-2 w-40 focus:outline-none focus:ring-2 focus:ring-clay"
             />
             <button
-              onClick={() => setShowHeightInput(false)}
+              onClick={handleHeightConfirm}
+              disabled={!isValidHeight(userHeight)}
+              className="text-sm bg-clay text-white px-3 py-1 rounded disabled:opacity-50"
+            >
+              Confirm
+            </button>
+            <button
+              onClick={() => {
+                // Skip does NOT save anything to localStorage
+                setHeightConfirmed(false)
+                setShowHeightInput(false)
+              }}
               className="text-sm text-clay underline"
             >
               Skip
             </button>
           </div>
+          {hasCachedHeight && (
+            <button
+              onClick={() => {
+                clearHeight()
+                setUserHeight("")
+                setHasCachedHeight(false)
+                setHeightConfirmed(false)
+              }}
+              className="text-xs text-gray-500 underline mt-2"
+            >
+              Clear saved height and start fresh
+            </button>
+          )}
           <p className="text-xs text-gray-500 mt-2">
-            Providing your height enables calibrated measurements for better accuracy
+            Providing your height (100-250 cm) enables calibrated measurements for better accuracy
           </p>
         </div>
       )}
@@ -1109,3 +1016,5 @@ function BodyScan() {
 }
 
 export default BodyScan
+
+

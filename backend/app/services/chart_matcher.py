@@ -126,6 +126,11 @@ def get_measurement_weights(category: str) -> dict:
     return MEASUREMENT_WEIGHTS.get(category.lower(), MEASUREMENT_WEIGHTS["shirts"])
 
 
+def has_usable_measurement(value: float) -> bool:
+    """Treat only positive measurements as usable for recommendation."""
+    return isinstance(value, (int, float)) and value > 0
+
+
 def calculate_size_distance(measurements: BodyMeasurements, entry: SizeChartEntry) -> tuple[float, list[str]]:
     """
     Calculate distance between user measurements and size entry thresholds.
@@ -136,7 +141,7 @@ def calculate_size_distance(measurements: BodyMeasurements, entry: SizeChartEntr
     weights = {"height": 1.0, "chest": 1.0, "waist": 1.0, "hips": 1.0, "shoulder": 1.0}
 
     # Height
-    if entry.height_min is not None and entry.height_max is not None:
+    if entry.height_min is not None and entry.height_max is not None and has_usable_measurement(measurements.height):
         ideal_height = (entry.height_min + entry.height_max) / 2
         height_range = entry.height_max - entry.height_min
         if height_range > 0:
@@ -145,7 +150,7 @@ def calculate_size_distance(measurements: BodyMeasurements, entry: SizeChartEntr
             measurements_used.append("height")
 
     # Chest
-    if entry.chest_min is not None and entry.chest_max is not None:
+    if entry.chest_min is not None and entry.chest_max is not None and has_usable_measurement(measurements.chest):
         ideal_chest = (entry.chest_min + entry.chest_max) / 2
         chest_range = entry.chest_max - entry.chest_min
         if chest_range > 0:
@@ -154,7 +159,7 @@ def calculate_size_distance(measurements: BodyMeasurements, entry: SizeChartEntr
             measurements_used.append("chest")
 
     # Waist
-    if entry.waist_min is not None and entry.waist_max is not None:
+    if entry.waist_min is not None and entry.waist_max is not None and has_usable_measurement(measurements.waist):
         ideal_waist = (entry.waist_min + entry.waist_max) / 2
         waist_range = entry.waist_max - entry.waist_min
         if waist_range > 0:
@@ -163,7 +168,7 @@ def calculate_size_distance(measurements: BodyMeasurements, entry: SizeChartEntr
             measurements_used.append("waist")
 
     # Hips
-    if entry.hips_min is not None and entry.hips_max is not None:
+    if entry.hips_min is not None and entry.hips_max is not None and has_usable_measurement(measurements.hips):
         ideal_hips = (entry.hips_min + entry.hips_max) / 2
         hips_range = entry.hips_max - entry.hips_min
         if hips_range > 0:
@@ -172,7 +177,7 @@ def calculate_size_distance(measurements: BodyMeasurements, entry: SizeChartEntr
             measurements_used.append("hips")
 
     # Shoulder
-    if entry.shoulder_min is not None and entry.shoulder_max is not None:
+    if entry.shoulder_min is not None and entry.shoulder_max is not None and has_usable_measurement(measurements.shoulder_width):
         ideal_shoulder = (entry.shoulder_min + entry.shoulder_max) / 2
         shoulder_range = entry.shoulder_max - entry.shoulder_min
         if shoulder_range > 0:
@@ -194,7 +199,7 @@ def calculate_weighted_distance(measurements: BodyMeasurements, entry: SizeChart
     measurements_used = []
 
     # Height
-    if entry.height_min is not None and entry.height_max is not None:
+    if entry.height_min is not None and entry.height_max is not None and has_usable_measurement(measurements.height):
         ideal_height = (entry.height_min + entry.height_max) / 2
         height_range = entry.height_max - entry.height_min
         if height_range > 0:
@@ -205,7 +210,7 @@ def calculate_weighted_distance(measurements: BodyMeasurements, entry: SizeChart
             measurements_used.append("height")
 
     # Chest
-    if entry.chest_min is not None and entry.chest_max is not None:
+    if entry.chest_min is not None and entry.chest_max is not None and has_usable_measurement(measurements.chest):
         ideal_chest = (entry.chest_min + entry.chest_max) / 2
         chest_range = entry.chest_max - entry.chest_min
         if chest_range > 0:
@@ -216,7 +221,7 @@ def calculate_weighted_distance(measurements: BodyMeasurements, entry: SizeChart
             measurements_used.append("chest")
 
     # Waist
-    if entry.waist_min is not None and entry.waist_max is not None:
+    if entry.waist_min is not None and entry.waist_max is not None and has_usable_measurement(measurements.waist):
         ideal_waist = (entry.waist_min + entry.waist_max) / 2
         waist_range = entry.waist_max - entry.waist_min
         if waist_range > 0:
@@ -227,7 +232,7 @@ def calculate_weighted_distance(measurements: BodyMeasurements, entry: SizeChart
             measurements_used.append("waist")
 
     # Hips
-    if entry.hips_min is not None and entry.hips_max is not None:
+    if entry.hips_min is not None and entry.hips_max is not None and has_usable_measurement(measurements.hips):
         ideal_hips = (entry.hips_min + entry.hips_max) / 2
         hips_range = entry.hips_max - entry.hips_min
         if hips_range > 0:
@@ -238,7 +243,7 @@ def calculate_weighted_distance(measurements: BodyMeasurements, entry: SizeChart
             measurements_used.append("hips")
 
     # Shoulder
-    if entry.shoulder_min is not None and entry.shoulder_max is not None:
+    if entry.shoulder_min is not None and entry.shoulder_max is not None and has_usable_measurement(measurements.shoulder_width):
         ideal_shoulder = (entry.shoulder_min + entry.shoulder_max) / 2
         shoulder_range = entry.shoulder_max - entry.shoulder_min
         if shoulder_range > 0:
@@ -279,23 +284,23 @@ def check_measurements_in_range(measurements: BodyMeasurements, entry: SizeChart
     """Check which measurements fall within the size entry range."""
     in_range = []
 
-    if entry.height_min is not None and entry.height_max is not None:
+    if entry.height_min is not None and entry.height_max is not None and has_usable_measurement(measurements.height):
         if entry.height_min <= measurements.height <= entry.height_max:
             in_range.append("height")
 
-    if entry.chest_min is not None and entry.chest_max is not None:
+    if entry.chest_min is not None and entry.chest_max is not None and has_usable_measurement(measurements.chest):
         if entry.chest_min <= measurements.chest <= entry.chest_max:
             in_range.append("chest")
 
-    if entry.waist_min is not None and entry.waist_max is not None:
+    if entry.waist_min is not None and entry.waist_max is not None and has_usable_measurement(measurements.waist):
         if entry.waist_min <= measurements.waist <= entry.waist_max:
             in_range.append("waist")
 
-    if entry.hips_min is not None and entry.hips_max is not None:
+    if entry.hips_min is not None and entry.hips_max is not None and has_usable_measurement(measurements.hips):
         if entry.hips_min <= measurements.hips <= entry.hips_max:
             in_range.append("hips")
 
-    if entry.shoulder_min is not None and entry.shoulder_max is not None:
+    if entry.shoulder_min is not None and entry.shoulder_max is not None and has_usable_measurement(measurements.shoulder_width):
         if entry.shoulder_min <= measurements.shoulder_width <= entry.shoulder_max:
             in_range.append("shoulder")
 
@@ -448,7 +453,24 @@ def predict_size(
     Main prediction function - matches body measurements against size chart.
     """
     warnings = []
-    measurements_used = []
+    measurements_used = [
+        name for name, value in {
+            "height": measurements.height,
+            "chest": measurements.chest,
+            "waist": measurements.waist,
+            "hips": measurements.hips,
+            "shoulder_width": measurements.shoulder_width,
+        }.items()
+        if has_usable_measurement(value)
+    ]
+
+    if len(measurements_used) < 2:
+        return SizePredictionResponse(
+            success=False,
+            recommendations=[],
+            measurements_used=measurements_used,
+            warnings=["At least two reliable measurements are required for size recommendation"]
+        )
 
     # Get size chart
     chart = size_chart
@@ -470,8 +492,6 @@ def predict_size(
 
     # Check for warnings
     if recommendations:
-        measurements_used = ["height", "chest", "waist", "hips", "shoulder_width"]
-
         # Check for extreme measurements
         proportions = calculate_body_proportions(measurements)
         if proportions["waist_to_height"] > 0.6:
@@ -491,6 +511,25 @@ def validate_size(request: SizeValidationRequest) -> SizeValidationResponse:
     """
     Validate if user's current size matches their body measurements.
     """
+    usable_measurements = [
+        value for value in [
+            request.measurements.height,
+            request.measurements.chest,
+            request.measurements.waist,
+            request.measurements.hips,
+            request.measurements.shoulder_width,
+        ]
+        if has_usable_measurement(value)
+    ]
+    if len(usable_measurements) < 2:
+        return SizeValidationResponse(
+            success=False,
+            is_match=False,
+            recommended_size=None,
+            fit_score=0,
+            explanation="At least two reliable measurements are required to validate size."
+        )
+
     size_chart = request.size_chart
 
     # Find the entry for the current size
