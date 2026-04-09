@@ -6,6 +6,8 @@ import ThumbnailGallery, { THUMBS } from '../components/ThumbnailGallery'
 import LandingSection from '../components/LandingSection'
 import FeaturePanel from '../components/FeaturePanel'
 
+const SLIDE_DURATION_MS = 6000
+
 export default function Home() {
 
   const [activeThumb, setActiveThumb] = useState(THUMBS[0])
@@ -40,6 +42,23 @@ export default function Home() {
 
   }, [])
 
+  useEffect(() => {
+    if (THUMBS.length <= 1) return
+
+    const slideInterval = window.setInterval(() => {
+      setActiveThumb((currentThumb) => {
+        const currentIndex = THUMBS.findIndex((thumb) => thumb.id === currentThumb?.id)
+        const nextIndex = currentIndex >= 0
+          ? (currentIndex + 1) % THUMBS.length
+          : 0
+
+        return THUMBS[nextIndex]
+      })
+    }, 3000)
+
+    return () => window.clearInterval(slideInterval)
+  }, [])
+
   return (
     <div className="min-h-screen bg-[#e7e3dd]">
       <Navbar />
@@ -55,7 +74,10 @@ export default function Home() {
 
           <section className="flex flex-col">
             <LandingSection 
-              image={activeThumb} 
+              image={activeThumb}
+              images={THUMBS}
+              slideDuration={SLIDE_DURATION_MS}
+              onSelectImage={setActiveThumb}
               isScanned={isScanned}
             />
           </section>
@@ -78,7 +100,10 @@ export default function Home() {
           />
 
           <LandingSection 
-            image={activeThumb} 
+            image={activeThumb}
+            images={THUMBS}
+            slideDuration={SLIDE_DURATION_MS}
+            onSelectImage={setActiveThumb}
             isScanned={isScanned}
           />
 
