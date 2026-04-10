@@ -24,8 +24,16 @@ async def predict_size(request: SizePredictionRequest):
     - **use_standard_chart**: Use standard size chart if no brand chart provided
     """
     try:
-        category = request.size_chart.category if request.size_chart else "shirts"
-        gender = request.size_chart.gender if request.size_chart and request.size_chart.gender else "men"
+        category = (
+            request.size_chart.category
+            if request.size_chart and request.size_chart.category
+            else (request.category or "shirts")
+        )
+        gender = (
+            request.size_chart.gender
+            if request.size_chart and request.size_chart.gender
+            else (request.gender or "men")
+        )
 
         result = chart_matcher.predict_size(
             measurements=request.measurements,

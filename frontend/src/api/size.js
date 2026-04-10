@@ -69,7 +69,8 @@ export async function getStandardCharts() {
  * @returns {Promise<Object>} - Size chart data
  */
 export async function getSizeChart(category, gender = 'men') {
-  return apiGet(`${ENDPOINTS.SIZE_CHART}/${category}`, { gender })
+  const params = new URLSearchParams({ gender })
+  return apiGet(`${ENDPOINTS.SIZE_CHART}/${category}?${params.toString()}`)
 }
 
 /**

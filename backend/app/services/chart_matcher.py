@@ -87,6 +87,13 @@ MEASUREMENT_WEIGHTS = {
     "jackets": {"height": 0.15, "chest": 0.35, "shoulder": 0.25, "waist": 0.15, "hips": 0.1}
 }
 
+PRIMARY_MEASUREMENTS_BY_CATEGORY = {
+    "shirts": ["chest", "waist", "height"],
+    "pants": ["waist", "hips", "height"],
+    "dresses": ["chest", "waist", "hips", "height"],
+    "jackets": ["chest", "shoulder_width", "height"],
+}
+
 
 def get_standard_chart(category: str, gender: str = "men") -> Optional[SizeChart]:
     """Get standard size chart for category and gender."""
@@ -129,6 +136,75 @@ def get_measurement_weights(category: str) -> dict:
 def has_usable_measurement(value: float) -> bool:
     """Treat only positive measurements as usable for recommendation."""
     return isinstance(value, (int, float)) and value > 0
+
+
+def get_chart_measurement_bounds(size_chart: SizeChart) -> dict[str, tuple[float, float]]:
+    """Get overall min/max bounds for each measurement present in a size chart."""
+    measurement_fields = {
+        "height": ("height_min", "height_max"),
+        "chest": ("chest_min", "chest_max"),
+        "waist": ("waist_min", "waist_max"),
+        "hips": ("hips_min", "hips_max"),
+        "shoulder_width": ("shoulder_min", "shoulder_max"),
+    }
+    bounds = {}
+
+    for measurement_name, (min_field, max_field) in measurement_fields.items():
+        min_values = [
+            getattr(entry, min_field)
+            for entry in size_chart.sizes
+            if getattr(entry, min_field) is not None
+        ]
+        max_values = [
+            getattr(entry, max_field)
+            for entry in size_chart.sizes
+            if getattr(entry, max_field) is not None
+        ]
+
+        if min_values and max_values:
+            bounds[measurement_name] = (min(min_values), max(max_values))
+
+    return bounds
+
+
+def detect_implausible_measurements(
+    measurements: BodyMeasurements,
+    size_chart: SizeChart
+) -> tuple[list[str], list[str]]:
+    """
+    Detect scan outputs that are far outside the selected chart range.
+    This helps avoid returning XS/24 simply because the scan under-measured the torso.
+    """
+    bounds = get_chart_measurement_bounds(size_chart)
+    category = size_chart.category.lower()
+    primary_measurements = PRIMARY_MEASUREMENTS_BY_CATEGORY.get(category, ["chest", "waist", "height"])
+
+    severe_issues = []
+    warning_issues = []
+
+    for measurement_name in primary_measurements:
+        value = getattr(measurements, measurement_name, 0)
+        if not has_usable_measurement(value):
+            continue
+
+        if measurement_name not in bounds:
+            continue
+
+        min_value, max_value = bounds[measurement_name]
+        if value < min_value * 0.75:
+            severe_issues.append(
+                f"{measurement_name.replace('_', ' ')} ({value:.1f} cm) is far below the selected chart range"
+            )
+        elif value > max_value * 1.25:
+            severe_issues.append(
+                f"{measurement_name.replace('_', ' ')} ({value:.1f} cm) is far above the selected chart range"
+            )
+        elif value < min_value * 0.9 or value > max_value * 1.1:
+            warning_issues.append(
+                f"{measurement_name.replace('_', ' ')} ({value:.1f} cm) is near the edge of the selected chart range"
+            )
+
+    return severe_issues, warning_issues
 
 
 def calculate_size_distance(measurements: BodyMeasurements, entry: SizeChartEntry) -> tuple[float, list[str]]:
@@ -485,6 +561,19 @@ def predict_size(
             recommendations=[],
             measurements_used=[],
             warnings=["No size chart available for the specified category"]
+        )
+
+    severe_issues, warning_issues = detect_implausible_measurements(measurements, chart)
+    warnings.extend(warning_issues)
+
+    if len(severe_issues) >= 2:
+        return SizePredictionResponse(
+            success=False,
+            recommendations=[],
+            measurements_used=measurements_used,
+            warnings=severe_issues + [
+                "Scan measurements appear inconsistent with the selected size chart. Try editing the measurements manually or rescanning."
+            ]
         )
 
     # Get recommendations

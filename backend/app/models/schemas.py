@@ -109,6 +109,8 @@ class SizePredictionRequest(BaseModel):
     measurements: BodyMeasurements = Field(..., description="Body measurements")
     size_chart: Optional[SizeChart] = Field(None, description="Brand-specific size chart")
     use_standard_chart: bool = Field(True, description="Use standard size chart if no brand chart provided")
+    category: Optional[str] = Field("shirts", description="Garment category for standard chart lookup")
+    gender: Optional[str] = Field("men", description="Target gender for standard chart lookup")
 
 
 class SizeRecommendation(BaseModel):
