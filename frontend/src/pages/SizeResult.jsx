@@ -9,7 +9,17 @@ import ErrorMessage from "../components/common/ErrorMessage"
 function SizeResult() {
 
   const navigate = useNavigate()
-  const { measurements, setMeasurements, preferences, clearMeasurements, confidenceScores, warnings, scanClassification, clearRecommendations } = useApp()
+  const {
+    measurements,
+    setMeasurements,
+    preferences,
+    setPreferences,
+    clearMeasurements,
+    confidenceScores,
+    warnings,
+    scanClassification,
+    clearRecommendations
+  } = useApp()
   const { recommendations, predict, loading, error, clearError, clear: clearPrediction } = useSizePrediction()
 
   const [manualInput, setManualInput] = useState(false)
@@ -133,6 +143,25 @@ function SizeResult() {
     }
   }
 
+  const handlePreferenceChange = async (field, value) => {
+    const nextPreferences = {
+      ...preferences,
+      [field]: value,
+    }
+
+    setPreferences({ [field]: value })
+    clearRecommendations()
+    clearPrediction()
+    clearError()
+
+    if (measurements && !isManualMode) {
+      await predict(measurements, {
+        category: nextPreferences.category,
+        gender: nextPreferences.gender,
+      })
+    }
+  }
+
   // Scan again
   const handleScanAgain = () => {
     clearMeasurements()
@@ -198,6 +227,38 @@ function SizeResult() {
         <h2 className="text-2xl font-semibold text-center mb-6">
           {loading ? 'Analyzing...' : 'Your Recommended Size'}
         </h2>
+
+        <div className="bg-white rounded-lg shadow-lg p-6 mb-6">
+          <h3 className="text-lg font-medium mb-4">Recommendation Settings</h3>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm text-gray-600 mb-1">Gender</label>
+              <select
+                value={preferences.gender || "men"}
+                onChange={(e) => handlePreferenceChange("gender", e.target.value)}
+                className="w-full border rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-clay"
+                disabled={loading}
+              >
+                <option value="men">Men</option>
+                <option value="women">Women</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm text-gray-600 mb-1">Category</label>
+              <select
+                value={preferences.category || "shirts"}
+                onChange={(e) => handlePreferenceChange("category", e.target.value)}
+                className="w-full border rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-clay"
+                disabled={loading}
+              >
+                <option value="shirts">Shirts</option>
+                <option value="pants">Pants</option>
+                <option value="jackets">Jackets</option>
+                <option value="dresses">Dresses</option>
+              </select>
+            </div>
+          </div>
+        </div>
 
         {/* Scan Classification Banner */}
         {scanClassification && (

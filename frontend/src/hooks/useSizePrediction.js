@@ -58,7 +58,11 @@ export function useSizePrediction(options = {}) {
         return response
       }
 
-      throw new ApiError('Prediction failed - no recommendations returned', 500)
+      const warningMessage = Array.isArray(response?.warnings) && response.warnings.length > 0
+        ? response.warnings.join(' ')
+        : 'Prediction failed - no recommendations returned'
+
+      throw new ApiError(warningMessage, 400, response)
 
     } catch (err) {
       const apiError = err instanceof ApiError
