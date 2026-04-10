@@ -5,7 +5,7 @@
 
 // Base URL from environment variable - remove trailing slashes for consistency
 const getApiBaseUrl = () => {
-  const url = import.meta.env.VITE_API_BASE_URL || ''
+  const url = (import.meta.env.VITE_API_BASE_URL || '').trim()
   // Remove trailing slashes to ensure consistent URL construction
   return url.replace(/\/+$/, '')
 }

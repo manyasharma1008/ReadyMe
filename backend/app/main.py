@@ -10,16 +10,37 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# CORS CONFIG - Add your Vercel frontend URL here
+DEFAULT_CORS_ORIGINS = [
+    "http://localhost:5173",
+    "http://localhost:5174",
+    "http://127.0.0.1:5173",
+    "http://127.0.0.1:5174",
+    "https://ready-me-liart.vercel.app",
+]
+DEFAULT_CORS_ALLOW_ORIGIN_REGEX = r"https://.*\.vercel\.app"
+
+
+def get_allowed_origins() -> list[str]:
+    raw_origins = os.getenv("BACKEND_CORS_ORIGINS", "")
+    configured_origins = [
+        origin.strip().rstrip("/")
+        for origin in raw_origins.split(",")
+        if origin.strip()
+    ]
+
+    merged_origins = []
+    for origin in DEFAULT_CORS_ORIGINS + configured_origins:
+        normalized_origin = origin.rstrip("/")
+        if normalized_origin and normalized_origin not in merged_origins:
+            merged_origins.append(normalized_origin)
+
+    return merged_origins
+
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://localhost:5174",
-        "http://127.0.0.1:5173",
-        "http://127.0.0.1:5174",
-        "https://ready-me-liart.vercel.app",  # UPDATE with youractual Vercel URL
-    ],
+    allow_origins=get_allowed_origins(),
+    allow_origin_regex=os.getenv("BACKEND_CORS_ALLOW_ORIGIN_REGEX", DEFAULT_CORS_ALLOW_ORIGIN_REGEX),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
