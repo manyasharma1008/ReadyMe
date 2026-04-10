@@ -773,7 +773,7 @@ async def measure_multiple_images(payload: MeasureMultipleRequest):
             chest=consistency.get('chest', 'medium'),
             waist=consistency.get('waist', 'medium'),
             hips=consistency.get('hips', 'medium'),
-            shoulders=consistency.get('shoulders', 'medium')
+            shoulders=consistency.get('shoulder_width', 'medium')
         )
 
         if front_enhanced:

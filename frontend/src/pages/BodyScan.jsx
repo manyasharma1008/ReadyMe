@@ -552,12 +552,24 @@ function BodyScan() {
       const heightParam = confirmedHeightCm
       console.log("Height confirmation:", { heightConfirmed, confirmedHeightCm })
 
-      const responses = await Promise.all([
-        base64Images.front ? scanMeasureEnhanced(base64Images.front, heightParam) : null,
-        base64Images.back ? scanMeasureEnhanced(base64Images.back, heightParam) : null,
-        base64Images.left ? scanMeasureEnhanced(base64Images.left, heightParam) : null,
-        base64Images.right ? scanMeasureEnhanced(base64Images.right, heightParam) : null,
-      ])
+      const orderedImages = [
+        ["front", base64Images.front],
+        ["back", base64Images.back],
+        ["left", base64Images.left],
+        ["right", base64Images.right],
+      ]
+
+      const responses = []
+      for (const [imageType, imageData] of orderedImages) {
+        if (!imageData) {
+          responses.push(null)
+          continue
+        }
+
+        console.log(`Processing ${imageType} scan...`)
+        const response = await scanMeasureEnhanced(imageData, heightParam)
+        responses.push(response)
+      }
 
       console.log("Individual responses:", responses)
       console.log(
@@ -568,31 +580,54 @@ function BodyScan() {
           scan_type: response?.scan_type || null,
         }))
       )
-
-      const validResponses = responses.filter(
-        (r) => r && r.measurements && Object.keys(r.measurements).length > 0
-      )
-
-      if (validResponses.length === 0) {
-        logCaptureStage("scan-failed-no-valid-measurements", {
-          responsesReceived: responses.filter(Boolean).length,
-        })
-        setScanClassification({ type: "invalid", confidence: 0 })
-        setWarnings(["No measurements detected. Please retake scan."])
-        setConfidenceScores({})
-        setMultiLoading(false)
-        setLocalError("No measurements detected. Please retake scan.")
-        return
-      }
+      console.log("Full scan responses:", JSON.stringify(responses, null, 2))
 
       const visResponse = await scanMeasureMultiple(base64Images, heightParam)
+      console.log("Multi-image scan response:", JSON.stringify(visResponse, null, 2))
       if (visResponse && visResponse.images) {
         setMultiScanResults({ images: visResponse.images })
       }
 
+      const validResponses = responses.filter((response) => {
+        if (!response?.measurements) return false
+        return RELIABLE_MEASUREMENT_KEYS.some((key) => {
+          const value = response.measurements?.[key]
+          return typeof value === "number" && value > 0
+        })
+      })
+
+      const hasMultiMeasurements = RELIABLE_MEASUREMENT_KEYS.some((key) => {
+        const value = visResponse?.measurements?.[key]
+        return typeof value === "number" && value > 0
+      })
+
+      if (validResponses.length === 0 && !hasMultiMeasurements) {
+        logCaptureStage("scan-failed-no-valid-measurements", {
+          responsesReceived: responses.filter(Boolean).length,
+          multiResponseSuccess: visResponse?.success || false,
+        })
+        const backendWarnings = [
+          ...(visResponse?.warnings || []),
+          ...responses.flatMap((response) => response?.warnings || []),
+        ]
+        const dedupedWarnings = backendWarnings.length > 0
+          ? [...new Set(backendWarnings)]
+          : ["No measurements detected. Please retake scan."]
+
+        setScanClassification({ type: "invalid", confidence: 0 })
+        setWarnings(dedupedWarnings)
+        setConfidenceScores({})
+        setMultiLoading(false)
+        setLocalError(dedupedWarnings[0] || "No measurements detected. Please retake scan.")
+        return
+      }
+
       const warnings = validResponses.length > 0
-        ? [...new Set(validResponses.flatMap(r => r.warnings || []))]
-        : ["Scan failed. Please ensure full body is visible and try again."]
+        ? [...new Set([
+            ...validResponses.flatMap(r => r.warnings || []),
+            ...(visResponse?.warnings || [])
+          ])]
+        : [...new Set(visResponse?.warnings || ["Scan failed. Please ensure full body is visible and try again."])]
 
       const confidenceList = validResponses.map(r => r.confidence || {})
       const combinedConfidence = {}
@@ -612,7 +647,23 @@ function BodyScan() {
           : 0
       })
 
-      const finalMeasurements = {
+      if (visResponse?.confidence) {
+        const confidenceEntries = Object.entries(visResponse.confidence)
+        confidenceEntries.forEach(([key, value]) => {
+          if (typeof value === "number") {
+            combinedConfidence[key] = Math.max(combinedConfidence[key] || 0, value)
+          } else if (typeof value === "string") {
+            const normalizedKey = key === "shoulders" ? "shoulder_width" : key
+            const levelScore =
+              value === "high" ? 0.9 :
+              value === "medium" ? 0.65 :
+              value === "low" ? 0.35 : 0
+            combinedConfidence[normalizedKey] = Math.max(combinedConfidence[normalizedKey] || 0, levelScore)
+          }
+        })
+      }
+
+      const averagedMeasurements = {
         height: 0,
         chest: 0,
         waist: 0,
@@ -625,9 +676,14 @@ function BodyScan() {
           .map(r => r.measurements?.[key])
           .filter(v => typeof v === "number" && v > 0)
         if (values.length > 0) {
-          finalMeasurements[key] = values.reduce((a, b) => a + b, 0) / values.length
+          averagedMeasurements[key] = values.reduce((a, b) => a + b, 0) / values.length
         }
       })
+
+      const finalMeasurements = {
+        ...averagedMeasurements,
+        ...(visResponse?.measurements || {}),
+      }
 
       const finalConfidence = { ...combinedConfidence }
       if (confirmedHeightCm !== null) {
@@ -659,7 +715,10 @@ function BodyScan() {
       }
 
       let finalScanType = "invalid"
-      const scanTypes = validResponses.map(r => r.scan_type)
+      const scanTypes = [
+        ...validResponses.map(r => r.scan_type),
+        visResponse?.scan_type,
+      ].filter(Boolean)
       if (scanTypes.includes("full_body")) {
         finalScanType = "full"
       } else if (scanTypes.includes("upper_body")) {
@@ -1016,5 +1075,3 @@ function BodyScan() {
 }
 
 export default BodyScan
-
-

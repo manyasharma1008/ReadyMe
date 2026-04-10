@@ -40,6 +40,7 @@ export async function scanMeasureBase64(base64String) {
  */
 export async function scanMeasureEnhanced(base64String, userHeightCm = null) {
   const base64 = base64String.includes(",") ? base64String.split(",")[1] : base64String;
+  const EXTENDED_TIMEOUT = 120000;
 
   // Only include user_height_cm if we have a valid numeric value
   const body = { image_data: base64 };
@@ -47,7 +48,7 @@ export async function scanMeasureEnhanced(base64String, userHeightCm = null) {
     body.user_height_cm = userHeightCm;
   }
 
-  return apiPost(ENDPOINTS.SCAN_MEASURE_ENHANCED, body);
+  return apiPost(ENDPOINTS.SCAN_MEASURE_ENHANCED, body, EXTENDED_TIMEOUT);
 }
 
 /**
