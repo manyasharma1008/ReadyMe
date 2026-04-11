@@ -170,3 +170,57 @@ class ProductExtractResponse(BaseModel):
     size_chart: Optional[SizeChart] = Field(None, description="Extracted size chart")
     message: Optional[str] = Field(None, description="Status message")
     warnings: Optional[list[str]] = Field(None, description="Extraction warnings")
+
+
+class ProductPageContext(BaseModel):
+    """Product context captured by the browser extension."""
+    url: str = Field(..., description="Product page URL")
+    title: Optional[str] = Field(None, description="Product title")
+    image: Optional[str] = Field(None, description="Primary product image URL")
+    price: Optional[str] = Field(None, description="Displayed price")
+    product_id: Optional[str] = Field(None, description="Site-specific product identifier")
+    brand: Optional[str] = Field(None, description="Detected brand")
+    category: Optional[str] = Field(None, description="Detected category")
+    gender: Optional[str] = Field(None, description="Detected target gender")
+    site_name: Optional[str] = Field(None, description="Website hostname")
+
+
+class ExtractedSizeChartRow(BaseModel):
+    """Flexible size row extracted from DOM before backend normalization."""
+    label: str = Field(..., description="Size label such as S, M, L, 32")
+    measurements: dict[str, float] = Field(
+        default_factory=dict,
+        description="Measurement name to numeric value mapping"
+    )
+
+
+class ExtractedSizeChart(BaseModel):
+    """Generic size chart payload sent from the browser extension."""
+    sizes: list[ExtractedSizeChartRow] = Field(..., description="Extracted size rows")
+    unit: Optional[str] = Field("cm", description="Original measurement unit, e.g. cm or inches")
+    source_type: Optional[str] = Field(None, description="DOM structure used, e.g. table or modal")
+    source_selector: Optional[str] = Field(None, description="Best-effort selector for the extracted node")
+    confidence: Optional[float] = Field(None, description="Extractor confidence 0-1")
+    warnings: list[str] = Field(default_factory=list, description="Extraction warnings")
+
+
+class ProductChartIngestRequest(BaseModel):
+    """Payload posted by the extension after DOM extraction."""
+    product: ProductPageContext = Field(..., description="Product page context")
+    size_chart: ExtractedSizeChart = Field(..., description="Extracted generic size chart")
+    measurements: Optional[BodyMeasurements] = Field(
+        None,
+        description="Optional body measurements for immediate recommendation"
+    )
+
+
+class ProductChartIngestResponse(BaseModel):
+    """Normalized extension chart payload and optional recommendation."""
+    success: bool = Field(..., description="Whether ingest and normalization succeeded")
+    product: ProductInfo = Field(..., description="Normalized product information")
+    size_chart: SizeChart = Field(..., description="Normalized size chart in backend format")
+    recommendation: Optional[SizePredictionResponse] = Field(
+        None,
+        description="Optional size recommendation generated from supplied measurements"
+    )
+    warnings: list[str] = Field(default_factory=list, description="Ingest and normalization warnings")
