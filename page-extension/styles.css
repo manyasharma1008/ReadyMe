@@ -2,7 +2,7 @@ body {
   margin: 0;
   padding: 0;
   width: 280px;
-  height: 360px;
+  min-height: 440px;
   background: #F5F1EB;
   font-family: 'DM Sans', sans-serif;
   color: #2C2B28;
@@ -40,7 +40,6 @@ body {
   border-radius: 8px;
   padding: 20px;
   text-align: center;
-
   box-shadow: 0 10px 30px rgba(44,43,40,0.08);
 }
 
@@ -90,6 +89,33 @@ body {
 .cta-btn span {
   position: relative;
   z-index: 1;
+}
+
+.debug-panel {
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid rgba(44,43,40,0.1);
+  text-align: left;
+}
+
+.debug-title {
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  opacity: 0.5;
+  margin: 0 0 10px;
+}
+
+.debug-status {
+  font-size: 11px;
+  line-height: 1.5;
+  color: #2C2B28;
+  background: rgba(245,241,235,0.9);
+  border: 1px solid rgba(44,43,40,0.08);
+  border-radius: 6px;
+  padding: 10px;
+  min-height: 92px;
+  white-space: pre-line;
 }
 
 /* Footer */

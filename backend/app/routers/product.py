@@ -10,10 +10,13 @@ from fastapi import APIRouter, HTTPException
 from app.models.schemas import (
     ProductExtractRequest,
     ProductExtractResponse,
+    ProductChartIngestRequest,
+    ProductChartIngestResponse,
     ProductInfo,
     SizeChart,
     SizeChartEntry
 )
+from app.services import chart_matcher
 
 router = APIRouter()
 
@@ -39,6 +42,24 @@ SIZE_PATTERNS = {
     "eu": [str(i) for i in range(32, 58)],  # EU sizes
     "uk": [str(i) for i in range(6, 20)],  # UK sizes
     "us": [str(i) for i in range(0, 20)],  # US sizes
+}
+
+MEASUREMENT_ALIASES = {
+    "chest": "chest",
+    "bust": "chest",
+    "across chest": "chest",
+    "waist": "waist",
+    "hips": "hips",
+    "hip": "hips",
+    "seat": "hips",
+    "length": "height",
+    "body length": "height",
+    "height": "height",
+    "outseam": "height",
+    "inseam": "height",
+    "shoulder": "shoulder_width",
+    "shoulders": "shoulder_width",
+    "shoulder width": "shoulder_width",
 }
 
 
@@ -415,6 +436,100 @@ def create_fallback_size_chart(category: str, gender: str = "men") -> SizeChart:
     return get_standard_chart(category, gender)
 
 
+def normalize_unit(unit: Optional[str]) -> str:
+    """Normalize units from extension payloads."""
+    raw = (unit or "cm").strip().lower()
+    if raw in {"in", "inch", "inches", '"'}:
+        return "inches"
+    return "cm"
+
+
+def to_cm(value: float, unit: str) -> float:
+    """Convert inches to cm when needed."""
+    numeric = float(value)
+    if unit == "inches":
+        return round(numeric * 2.54, 2)
+    return round(numeric, 2)
+
+
+def normalize_measurement_name(name: str) -> Optional[str]:
+    """Map extractor measurement labels to backend chart keys."""
+    normalized = re.sub(r"[^a-z\s]", " ", name.lower()).strip()
+    normalized = re.sub(r"\s+", " ", normalized)
+
+    if normalized in MEASUREMENT_ALIASES:
+        return MEASUREMENT_ALIASES[normalized]
+
+    for alias, canonical in MEASUREMENT_ALIASES.items():
+        if alias in normalized:
+            return canonical
+
+    return None
+
+
+def build_size_chart_from_extension(request: ProductChartIngestRequest) -> tuple[SizeChart, list[str]]:
+    """Normalize extension DOM extraction payload into backend size chart schema."""
+    warnings = list(request.size_chart.warnings or [])
+    unit = normalize_unit(request.size_chart.unit)
+    category = request.product.category or "shirts"
+    gender = request.product.gender
+    brand = request.product.brand or extract_brand_from_url(request.product.url) or "Unknown Brand"
+
+    normalized_sizes = []
+
+    for row in request.size_chart.sizes:
+        entry_payload = {"size": row.label.strip()}
+        normalized_count = 0
+
+        for raw_name, raw_value in row.measurements.items():
+            if raw_value is None:
+                continue
+
+            canonical_name = normalize_measurement_name(raw_name)
+            if not canonical_name:
+                warnings.append(f"Ignored unsupported measurement column '{raw_name}'")
+                continue
+
+            measurement_value = to_cm(raw_value, unit)
+
+            if canonical_name == "height":
+                entry_payload["height_min"] = measurement_value
+                entry_payload["height_max"] = measurement_value
+            elif canonical_name == "chest":
+                entry_payload["chest_min"] = measurement_value
+                entry_payload["chest_max"] = measurement_value
+            elif canonical_name == "waist":
+                entry_payload["waist_min"] = measurement_value
+                entry_payload["waist_max"] = measurement_value
+            elif canonical_name == "hips":
+                entry_payload["hips_min"] = measurement_value
+                entry_payload["hips_max"] = measurement_value
+            elif canonical_name == "shoulder_width":
+                entry_payload["shoulder_min"] = measurement_value
+                entry_payload["shoulder_max"] = measurement_value
+
+            normalized_count += 1
+
+        if normalized_count == 0:
+            warnings.append(f"Skipped size '{row.label}' because it had no supported numeric measurements")
+            continue
+
+        normalized_sizes.append(SizeChartEntry(**entry_payload))
+
+    if not normalized_sizes:
+        raise ValueError("No usable size rows were found in the extracted size chart")
+
+    return (
+        SizeChart(
+            brand=brand,
+            category=category,
+            sizes=normalized_sizes,
+            gender=gender
+        ),
+        warnings
+    )
+
+
 @router.post("/extract", response_model=ProductExtractResponse)
 async def extract_product_size_chart(request: ProductExtractRequest):
     """
@@ -562,3 +677,42 @@ async def get_supported_platforms():
         ],
         "note": "Generic parsing works on most e-commerce sites"
     }
+
+
+@router.post("/ingest-chart", response_model=ProductChartIngestResponse)
+async def ingest_extension_chart(request: ProductChartIngestRequest):
+    """
+    Accept a size chart extracted from a live product page by the browser extension.
+    """
+    try:
+        normalized_chart, warnings = build_size_chart_from_extension(request)
+
+        product = ProductInfo(
+            name=request.product.title or "Unknown Product",
+            brand=normalized_chart.brand,
+            category=normalized_chart.category,
+            gender=normalized_chart.gender,
+            url=request.product.url
+        )
+
+        recommendation = None
+        if request.measurements is not None:
+            recommendation = chart_matcher.predict_size(
+                measurements=request.measurements,
+                size_chart=normalized_chart,
+                use_standard_chart=False,
+                category=normalized_chart.category,
+                gender=normalized_chart.gender or "men"
+            )
+
+        return ProductChartIngestResponse(
+            success=True,
+            product=product,
+            size_chart=normalized_chart,
+            recommendation=recommendation,
+            warnings=warnings
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Chart ingest error: {str(exc)}")
