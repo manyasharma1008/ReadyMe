@@ -1,0 +1,233 @@
+import numpy as np
+import pytest
+
+
+def test_calculate_measurements_enhanced_no_unbound_local_error():
+    """calculate_measurements_enhanced must not raise UnboundLocalError on reliable_measurements."""
+    from app.services.measurement import calculate_measurements_enhanced
+
+    # Minimal valid input that reaches the partial-success check at line 1622
+    # Need 4 angles x 33 landmarks each, with shoulder/chest-level visibility
+    landmarks = [[{'x': 0.5, 'y': 0.3, 'visibility': 0.8}] * 33 for _ in range(4)]
+    image_shape = (100, 100, 3)
+
+    try:
+        result = calculate_measurements_enhanced(
+            landmarks, image_shape,
+            user_height_cm=170.0,
+        )
+        # Must not raise UnboundLocalError; result may be success or failure
+        assert isinstance(result, dict), "Result must be a dict"
+        assert 'success' in result, "Result must have 'success' key"
+    except UnboundLocalError as e:
+        pytest.fail(f"UnboundLocalError raised: {e}")
+
+
+def test_calculate_height_derives_from_landmarks():
+    """Height should change based on landmark extent, not echo user_height_cm."""
+    from app.services.measurement import calculate_height
+
+    # Two landmarks: head (y=0.05) and feet (y=0.95) in a 100px-tall image
+    tall_landmarks = [
+        {'y': 0.05, 'visibility': 0.8},  # nose
+        {'y': 0.95, 'visibility': 0.8},  # left_ankle
+    ] + [{'y': 0.5, 'visibility': 0.8}] * 27  # pad to 29
+
+    # Same user height, but landmarks span 80% of image (taller person proxy)
+    result_tall = calculate_height(tall_landmarks, (100, 100, 3), user_height_cm=170)
+    assert result_tall != 170, f"Height must derive from landmarks, got {result_tall}"
+
+    # Short landmarks: head (y=0.3) and hips (y=0.6) — smaller span
+    short_landmarks = [
+        {'y': 0.3, 'visibility': 0.8},
+        {'y': 0.6, 'visibility': 0.8},
+    ] + [{'y': 0.5, 'visibility': 0.8}] * 27
+
+    result_short = calculate_height(short_landmarks, (100, 100, 3), user_height_cm=170)
+    assert result_short != 170, f"Height must derive from landmarks, got {result_short}"
+
+    # They must differ since landmark extents differ
+    assert result_tall != result_short, "Different landmark extents must yield different heights"
+
+
+def test_compute_confidence_penalizes_distant_subject():
+    """Confidence should decrease when fill_ratio indicates subject is far from camera."""
+    from app.services.measurement import compute_confidence
+
+    # Create landmarks with high visibility (would normally give ~0.8+ confidence)
+    landmarks = [{'visibility': 0.9, 'x': 0.5, 'y': 0.5}] * 33
+
+    # Near subject: fill_ratio = 0.8 (good)
+    conf_near = compute_confidence(landmarks, 'full_body', has_calibration=False, fill_ratio=0.8)
+    near_avg = (conf_near['chest'] + conf_near['shoulder_width'] + conf_near['hips']) / 3
+
+    # Far subject: fill_ratio = 0.25 (poor — barely fills 25% of image)
+    conf_far = compute_confidence(landmarks, 'full_body', has_calibration=False, fill_ratio=0.25)
+    far_avg = (conf_far['chest'] + conf_far['shoulder_width'] + conf_far['hips']) / 3
+
+    # Far subject should have lower confidence than near subject
+    assert far_avg < near_avg, f"Distant subject confidence ({far_avg:.3f}) should be lower than near ({near_avg:.3f})"
+
+
+def test_compute_confidence_no_penalty_when_close():
+    """Confidence should NOT be penalized when fill_ratio >= DISTANCE_PENALTY_THRESHOLD."""
+    from app.services.measurement import compute_confidence
+
+    landmarks = [{'visibility': 0.85, 'x': 0.5, 'y': 0.5}] * 33
+
+    # At threshold — no penalty
+    conf_ok = compute_confidence(landmarks, 'full_body', has_calibration=False, fill_ratio=0.50)
+    # Well within range — no penalty
+    conf_good = compute_confidence(landmarks, 'full_body', has_calibration=False, fill_ratio=0.70)
+
+    assert conf_ok == conf_good, "Confidence should be identical at and above distance penalty threshold"
+
+
+def test_shoulder_width_uses_ratio_normalization():
+    """Shoulder width must not change with camera distance when pixel_height scales."""
+    from app.services.measurement import calculate_shoulder_width
+
+    # Create shoulder landmarks with known width (10% of image apart)
+    landmarks = [{'visibility': 0.8, 'x': 0.5, 'y': 0.5}] * 33
+    landmarks[11] = {'visibility': 0.8, 'x': 0.45, 'y': 0.3}  # left_shoulder
+    landmarks[12] = {'visibility': 0.8, 'x': 0.55, 'y': 0.3}  # right_shoulder
+
+    # Near: 100px tall image, pixel_height=80
+    width_near, _ = calculate_shoulder_width(landmarks, (100, 100, 3), pixel_height=80, user_height_cm=170)
+    # Far: 200px tall image, pixel_height=160 (same physical width, double pixel_height)
+    width_far, _ = calculate_shoulder_width(landmarks, (200, 200, 3), pixel_height=160, user_height_cm=170)
+
+    # Same physical width expected — distance should not matter
+    assert abs(width_near - width_far) < 0.5, \
+        f"Shoulder width should be distance-independent: near={width_near:.1f}, far={width_far:.1f}"
+
+
+def test_hips_uses_ratio_normalization():
+    """Hips measurement must not change with camera distance."""
+    from app.services.measurement import calculate_hips
+
+    landmarks = [{'visibility': 0.8, 'x': 0.5, 'y': 0.5}] * 33
+    landmarks[23] = {'visibility': 0.8, 'x': 0.43, 'y': 0.7}  # left_hip
+    landmarks[24] = {'visibility': 0.8, 'x': 0.57, 'y': 0.7}  # right_hip
+
+    width_near, _ = calculate_hips(landmarks, (100, 100, 3), pixel_height=80, user_height_cm=170)
+    width_far, _ = calculate_hips(landmarks, (200, 200, 3), pixel_height=160, user_height_cm=170)
+
+    assert abs(width_near - width_far) < 0.5, \
+        f"Hips should be distance-independent: near={width_near:.1f}, far={width_far:.1f}"
+
+
+def test_waist_uses_ratio_normalization():
+    """Waist measurement must not change with camera distance."""
+    from app.services.measurement import calculate_waist
+
+    landmarks = [{'visibility': 0.8, 'x': 0.5, 'y': 0.5}] * 33
+    landmarks[11] = {'visibility': 0.8, 'x': 0.45, 'y': 0.2}
+    landmarks[12] = {'visibility': 0.8, 'x': 0.55, 'y': 0.2}
+    landmarks[23] = {'visibility': 0.8, 'x': 0.43, 'y': 0.7}
+    landmarks[24] = {'visibility': 0.8, 'x': 0.57, 'y': 0.7}
+
+    waist_near, _ = calculate_waist(landmarks, (100, 100, 3), pixel_height=80, user_height_cm=170)
+    waist_far, _ = calculate_waist(landmarks, (200, 200, 3), pixel_height=160, user_height_cm=170)
+
+    assert abs(waist_near - waist_far) < 0.5, \
+        f"Waist should be distance-independent: near={waist_near:.1f}, far={waist_far:.1f}"
+
+
+def test_hips_rejects_low_visibility_landmarks():
+    """Hips should be marked invalid when hip landmarks have low visibility."""
+    from app.services.measurement import calculate_hips
+
+    # Landmarks with LOW visibility hips (0.2 — below LANDMARK_CONFIDENCE_THRESHOLD of 0.6)
+    landmarks = [{'visibility': 0.8, 'x': 0.5, 'y': 0.5}] * 33
+    landmarks[23] = {'visibility': 0.2, 'x': 0.43, 'y': 0.7}  # left_hip — low visibility
+    landmarks[24] = {'visibility': 0.2, 'x': 0.57, 'y': 0.7}  # right_hip — low visibility
+    landmarks[11] = {'visibility': 0.8, 'x': 0.45, 'y': 0.3}
+    landmarks[12] = {'visibility': 0.8, 'x': 0.55, 'y': 0.3}
+
+    hips_cm, is_valid = calculate_hips(landmarks, (100, 100, 3), pixel_height=80, user_height_cm=170)
+
+    # With low visibility, should be marked invalid (is_valid = False)
+    assert is_valid == False, f"Hips with low visibility (0.2) should be invalid, got is_valid={is_valid}"
+    assert hips_cm == 0.0, f"Hips with low visibility should be 0.0, got {hips_cm}"
+
+
+def test_reject_small_pixel_height():
+    """Measurements must be rejected when pixel_height is too small (subject too far)."""
+    import numpy as np
+    from app.services.measurement import calculate_measurements_enhanced
+
+    landmarks = [{'visibility': 0.8, 'x': 0.5, 'y': 0.5}] * 33
+    # Head landmark at y=0.05, feet at y=0.20 -> pixel_height ~15 in 100px image = 0.15 fill_ratio
+    landmarks[0] = {'visibility': 0.8, 'x': 0.5, 'y': 0.05}  # nose (head top)
+    landmarks[11] = {'visibility': 0.8, 'x': 0.45, 'y': 0.15}
+    landmarks[12] = {'visibility': 0.8, 'x': 0.55, 'y': 0.15}
+    landmarks[23] = {'visibility': 0.8, 'x': 0.43, 'y': 0.18}
+    landmarks[24] = {'visibility': 0.8, 'x': 0.57, 'y': 0.18}
+    # Feet landmarks near y=0.20 to get ~15px pixel_height in 100px image
+    landmarks[27] = {'visibility': 0.8, 'x': 0.48, 'y': 0.20}  # left_ankle
+    landmarks[28] = {'visibility': 0.8, 'x': 0.52, 'y': 0.20}  # right_ankle
+    landmarks[29] = {'visibility': 0.8, 'x': 0.5, 'y': 0.5}
+    landmarks[30] = {'visibility': 0.8, 'x': 0.5, 'y': 0.5}
+    landmarks[31] = {'visibility': 0.8, 'x': 0.5, 'y': 0.5}
+    landmarks[32] = {'visibility': 0.8, 'x': 0.5, 'y': 0.5}
+
+    landmarks_data = {'landmarks': landmarks}
+
+    # pixel_height of 15 in a 100px image = fill_ratio of 0.15 — below MIN_PIXEL_HEIGHT_RATIO (0.30)
+    result = calculate_measurements_enhanced(
+        landmarks_data, (100, 100, 3),
+        user_height_cm=170.0,
+        calibration_factor=None
+    )
+    # Should fail with a warning about subject being too far
+    assert result['success'] == False, "Small pixel_height should produce failure"
+    assert any('too far' in w.lower() or 'fill_ratio' in w.lower() for w in result['warnings']), \
+        f"Warning should mention distance issue, got: {result['warnings']}"
+
+
+def test_calculate_height_no_hardcoded_reference_fraction():
+    """calculate_height() must not use a hardcoded reference fraction — must derive from actual landmark extent."""
+    from app.services.measurement import calculate_height
+
+    # Create landmarks spanning different vertical portions of the image
+    # Case 1: tall person — landmarks span 0.08 to 0.95 of image (87% of image)
+    tall_landmarks = [{'y': 0.5, 'visibility': 0.8}] * 33
+    tall_landmarks[0] = {'y': 0.08, 'visibility': 0.8}   # nose near top
+    tall_landmarks[28] = {'y': 0.95, 'visibility': 0.8}   # right_ankle near bottom
+
+    result_tall = calculate_height(tall_landmarks, (100, 100, 3), user_height_cm=170)
+    # Must NOT equal 170 — actual landmark extent is different from reference
+
+    # Case 2: short person — same user_height_cm but landmarks only span center
+    short_landmarks = [{'y': 0.5, 'visibility': 0.8}] * 33
+    short_landmarks[0] = {'y': 0.30, 'visibility': 0.8}   # nose in middle
+    short_landmarks[28] = {'y': 0.70, 'visibility': 0.8} # ankle in middle
+
+    result_short = calculate_height(short_landmarks, (100, 100, 3), user_height_cm=170)
+
+    # Different landmark extents MUST produce different heights
+    assert abs(result_tall - result_short) > 5, \
+        f"Different landmark extents must yield different heights: tall={result_tall:.1f}, short={result_short:.1f}"
+
+
+def test_calculate_pixel_height_uses_specific_extremes():
+    """calculate_pixel_height() must use specific head (nose/eyes/ears) and foot (ankles) landmarks, not min/max of all head landmarks."""
+    from app.services.measurement import calculate_pixel_height
+
+    # Landmarks where nose is at top (y=0.05) and ankles at bottom (y=0.90)
+    # Using nose (index 0) specifically and ankles (27, 28)
+    landmarks = [{'y': 0.5, 'visibility': 0.8}] * 33
+    landmarks[0] = {'y': 0.05, 'visibility': 0.8}    # nose — highest point
+    landmarks[1] = {'y': 0.06, 'visibility': 0.8}    # left_eye — slightly below nose
+    landmarks[2] = {'y': 0.06, 'visibility': 0.8}    # right_eye
+    landmarks[27] = {'y': 0.90, 'visibility': 0.8}    # left_ankle — lowest point
+    landmarks[28] = {'y': 0.91, 'visibility': 0.8}    # right_ankle
+
+    # For a 100px tall image: (0.90 - 0.05) * 100 = 85px, with correction factor 1.12 -> ~95px
+    pixel_h = calculate_pixel_height(landmarks, (100, 100, 3), fallback_height_cm=170)
+
+    # With correction factor, expect ~95px (not 85px, not 80px)
+    # The key is: uses specific landmarks AND applies correction
+    assert 90 <= pixel_h <= 100, \
+        f"pixel_height with correction should be ~95px for this landmark config, got {pixel_h}"
