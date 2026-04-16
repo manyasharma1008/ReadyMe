@@ -1,4 +1,4 @@
-const READYME_PREVIEW_BASE_URL = "http://127.0.0.1:5173";
+const READYME_PREVIEW_BASE_URL = "https://ready-me-liart.vercel.app";
 
 function getStorageKey(tabId) {
   return `readyMeLastRun_${tabId}`;
@@ -64,14 +64,14 @@ function extractMeasurementKeys(sizeChart) {
   return Array.from(keys);
 }
 
-function buildRedirectUrl(payload, backendSync = null) {
+function buildRedirectUrl(payload, backendSync = null, resolvedSizeChart = null, resolvedWarnings = null) {
   const encoded = encodeURIComponent(
-    JSON.stringify({
-      product: payload.product,
-      sizeChart: payload.sizeChart,
-      extractionWarnings: payload.warnings || [],
-      backendSync,
-    })
+      JSON.stringify({
+        product: payload.product,
+        sizeChart: resolvedSizeChart ?? payload.sizeChart,
+        extractionWarnings: resolvedWarnings ?? payload.warnings ?? [],
+        backendSync,
+      })
   );
 
   return `${READYME_PREVIEW_BASE_URL}/?data=${encoded}`;
@@ -153,55 +153,105 @@ document.addEventListener("DOMContentLoaded", () => {
 
           if (!payload.isProductPage) return;
 
-          const finishRedirect = (backendSync = null) => {
+          const finishRedirect = (
+            backendSync = null,
+            resolvedSizeChart = payload.sizeChart,
+            resolvedWarnings = payload.warnings || []
+          ) => {
             chrome.tabs.create({
-              url: buildRedirectUrl(payload, backendSync),
+              url: buildRedirectUrl(payload, backendSync, resolvedSizeChart, resolvedWarnings),
             });
           };
 
-          if (!payload.sizeChart) {
-            finishRedirect(null);
-            return;
-          }
-
-          // ✅ Step 4: backend sync
-          chrome.runtime.sendMessage(
-            {
-              action: "INGEST_SIZE_CHART",
-              payload: {
-                product: payload.product,
-                size_chart: payload.sizeChart,
+          const syncWithBackend = (sizeChartPayload) => {
+            chrome.runtime.sendMessage(
+              {
+                action: "INGEST_SIZE_CHART",
+                payload: {
+                  product: payload.product,
+                  size_chart: sizeChartPayload,
+                },
               },
-            },
-            (response) => {
-              if (chrome.runtime.lastError || !response?.success) {
+              (response) => {
+                if (chrome.runtime.lastError || !response?.success) {
+                  saveDebugState(tabId, {
+                    ...extractedState,
+                    status: "backend sync failed",
+                    backendSync: response?.error || "Backend sync failed",
+                    timestamp: buildTimestamp(),
+                  });
+
+                  finishRedirect({
+                    success: false,
+                    error: response?.error || "Backend sync failed",
+                  });
+                  return;
+                }
+
                 saveDebugState(tabId, {
                   ...extractedState,
-                  status: "backend sync failed",
-                  backendSync:
-                    response?.error || "Backend sync failed",
+                  status: "backend sync complete",
+                  backendSync: "success",
+                  normalizedSizeCount:
+                    response.result?.size_chart?.sizes?.length || 0,
                   timestamp: buildTimestamp(),
                 });
 
-                finishRedirect({
-                  success: false,
-                  error: response?.error || "Backend sync failed",
-                });
-                return;
+                finishRedirect(response.result, payload.sizeChart, payload.warnings || []);
               }
+            );
+          };
 
-              saveDebugState(tabId, {
-                ...extractedState,
-                status: "backend sync complete",
-                backendSync: "success",
-                normalizedSizeCount:
-                  response.result?.size_chart?.sizes?.length || 0,
-                timestamp: buildTimestamp(),
-              });
+          if (!payload.sizeChart) {
+            saveDebugState(tabId, {
+              ...extractedState,
+              status: "backend fallback extraction",
+              backendSync: "searching",
+              timestamp: buildTimestamp(),
+            });
 
-              finishRedirect(response.result);
-            }
-          );
+            chrome.runtime.sendMessage(
+              {
+                action: "EXTRACT_SIZE_CHART_FROM_URL",
+                payload: {
+                  product: payload.product,
+                },
+              },
+              (response) => {
+                if (chrome.runtime.lastError || !response?.success) {
+                  saveDebugState(tabId, {
+                    ...extractedState,
+                    status: "backend fallback failed",
+                    backendSync: response?.error || "Backend fallback failed",
+                    timestamp: buildTimestamp(),
+                  });
+                  return;
+                }
+
+                const backendResult = response.result;
+                const backendChart = backendResult?.size_chart;
+
+                saveDebugState(tabId, {
+                  status: "backend sync complete",
+                  productTitle: payload.product?.title || "Unknown product",
+                  siteName: payload.product?.site_name || "",
+                  isProductPage: true,
+                  sizeCount: backendChart?.sizes?.length || 0,
+                  measurementKeys: extractMeasurementKeys(backendChart),
+                  backendSync: "success",
+                  normalizedSizeCount: backendChart?.sizes?.length || 0,
+                  warning: (backendResult?.warnings || []).join(" | "),
+                  timestamp: buildTimestamp(),
+                });
+
+                finishRedirect(backendResult, backendChart, backendResult?.warnings || []);
+              }
+            );
+
+            return;
+          }
+
+          syncWithBackend(payload.sizeChart);
         }
       );
     });
