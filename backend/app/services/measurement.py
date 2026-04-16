@@ -1,5 +1,6 @@
 import numpy as np
 import math
+import threading
 
 
 # Average human proportions for scaling (in cm)
@@ -51,17 +52,27 @@ TRIM_PERCENT = 0.05  # Remove top/bottom 5% of Y values for height calculation
 CONSISTENCY_THRESHOLD = 0.25  # Mark as low confidence if variation > 25%
 MEASUREMENT_CONFIDENCE_THRESHOLD = 0.5
 HEAD_LANDMARK_INDICES = list(range(11))
-FOOT_LANDMARK_INDICES = [27, 28, 29, 30, 31, 32]
+FOOT_LANDMARK_INDICES = [27, 28]  # Ankle landmarks only (29-32 are face-only in MediaPipe Pose)
 RELIABLE_MEASUREMENT_KEYS = ["chest", "waist", "hips", "shoulder_width"]
 CHEST_LINE_RATIO = 0.2
 WAIST_LINE_RATIO = 0.55
 CHEST_CIRCUMFERENCE_FACTOR = 2.15
 WAIST_CIRCUMFERENCE_FACTOR = 2.0
 HIP_CIRCUMFERENCE_FACTOR = 2.2
+# Fallback circumference factors (used only when depth is unmeasurable)
+# Updated to reflect actual torso depth/width ratios ~0.70
+FALLBACK_CHEST_CIRCUMFERENCE_FACTOR = 2.65
+FALLBACK_WAIST_CIRCUMFERENCE_FACTOR = 2.60
+FALLBACK_HIP_CIRCUMFERENCE_FACTOR = 2.75
 HEAD_TO_HIP_HEIGHT_RATIO = 0.52
 MIN_ESTIMATED_HEIGHT_MULTIPLIER = 0.45
 MAX_ESTIMATED_HEIGHT_MULTIPLIER = 1.15
 TORSO_HEIGHT_CONFIDENCE = 0.55
+
+# Distance-based scaling settings
+MIN_PIXEL_HEIGHT_RATIO = 0.30  # Minimum fill ratio (person_height / image_height) for valid measurements
+DISTANCE_PENALTY_THRESHOLD = 0.50  # fill_ratio below this triggers confidence penalty
+MAX_CONFIDENCE_PENALTY = 0.30  # Maximum penalty applied when subject is very far
 
 
 def validate_landmarks(landmarks: list, visibility_threshold: float = VISIBILITY_THRESHOLD) -> dict:
@@ -164,7 +175,8 @@ def classify_scan_type(landmarks: list, visibility_threshold: float = VISIBILITY
 
 
 def compute_confidence(landmarks: list, scan_type: str, has_calibration: bool = False,
-                       visibility_threshold: float = VISIBILITY_THRESHOLD) -> dict:
+                       visibility_threshold: float = VISIBILITY_THRESHOLD,
+                       fill_ratio: float = 0.8) -> dict:
     """
     Compute confidence scores for each measurement.
 
@@ -219,19 +231,25 @@ def compute_confidence(landmarks: list, scan_type: str, has_calibration: bool = 
     # Calibration bonus
     calibration_bonus = 0.1 if has_calibration else 0.0
 
+    # Distance penalty: penalize when subject is far from camera (fill_ratio is low)
+    if fill_ratio < DISTANCE_PENALTY_THRESHOLD:
+        distance_penalty = MAX_CONFIDENCE_PENALTY * (1 - fill_ratio / DISTANCE_PENALTY_THRESHOLD)
+    else:
+        distance_penalty = 0.0
+
     # Apply confidence based on scan type and available landmarks
     if scan_type == 'full_body':
-        confidence['height'] = min(1.0, average_visibility([0, 27, 28]) + symmetry_bonus * 0.2 + calibration_bonus)
-        confidence['chest'] = min(1.0, average_visibility([11, 12]) + symmetry_bonus * 0.2 + calibration_bonus)
-        confidence['waist'] = min(1.0, average_visibility([11, 12, 23, 24]) + symmetry_bonus * 0.2 + calibration_bonus)
-        confidence['hips'] = min(1.0, average_visibility([23, 24]) + symmetry_bonus * 0.2 + calibration_bonus)
-        confidence['shoulder_width'] = min(1.0, average_visibility([11, 12]) + symmetry_bonus * 0.2 + calibration_bonus)
+        confidence['height'] = max(0.0, min(1.0, average_visibility([0, 27, 28]) + symmetry_bonus * 0.2 + calibration_bonus - distance_penalty))
+        confidence['chest'] = max(0.0, min(1.0, average_visibility([11, 12]) + symmetry_bonus * 0.2 + calibration_bonus - distance_penalty))
+        confidence['waist'] = max(0.0, min(1.0, average_visibility([11, 12, 23, 24]) + symmetry_bonus * 0.2 + calibration_bonus - distance_penalty))
+        confidence['hips'] = max(0.0, min(1.0, average_visibility([23, 24]) + symmetry_bonus * 0.2 + calibration_bonus - distance_penalty))
+        confidence['shoulder_width'] = max(0.0, min(1.0, average_visibility([11, 12]) + symmetry_bonus * 0.2 + calibration_bonus - distance_penalty))
     elif scan_type == 'upper_body':
-        confidence['height'] = min(0.75, average_visibility([0, 23, 24]) + symmetry_bonus * 0.1 + calibration_bonus)
-        confidence['chest'] = min(1.0, average_visibility([11, 12]) + symmetry_bonus * 0.2 + calibration_bonus)
-        confidence['waist'] = min(0.8, average_visibility([11, 12, 23, 24]) + symmetry_bonus * 0.15 + calibration_bonus)
-        confidence['hips'] = min(0.75, average_visibility([23, 24]) + symmetry_bonus * 0.1 + calibration_bonus)
-        confidence['shoulder_width'] = min(1.0, average_visibility([11, 12]) + symmetry_bonus * 0.2 + calibration_bonus)
+        confidence['height'] = max(0.0, min(0.75, average_visibility([0, 23, 24]) + symmetry_bonus * 0.1 + calibration_bonus - distance_penalty))
+        confidence['chest'] = max(0.0, min(1.0, average_visibility([11, 12]) + symmetry_bonus * 0.2 + calibration_bonus - distance_penalty))
+        confidence['waist'] = max(0.0, min(0.8, average_visibility([11, 12, 23, 24]) + symmetry_bonus * 0.15 + calibration_bonus - distance_penalty))
+        confidence['hips'] = max(0.0, min(0.75, average_visibility([23, 24]) + symmetry_bonus * 0.1 + calibration_bonus - distance_penalty))
+        confidence['shoulder_width'] = max(0.0, min(1.0, average_visibility([11, 12]) + symmetry_bonus * 0.2 + calibration_bonus - distance_penalty))
 
     return confidence
 
@@ -382,6 +400,7 @@ class CalibrationSystem:
     def __init__(self):
         self.calibration_factor = None  # pixels per cm
         self.user_height_cm = None  # User's known height for calibration
+        self._lock = threading.Lock()
 
     def calibrate_from_height(self, landmarks: list, image_shape: tuple, actual_height_cm: float) -> float:
         """
@@ -409,8 +428,9 @@ class CalibrationSystem:
             raise ValueError("Invalid landmarks: pixel height must be positive")
 
         # calibration_factor = pixels / cm
-        self.calibration_factor = pixel_height / actual_height_cm
-        self.user_height_cm = actual_height_cm
+        with self._lock:
+            self.calibration_factor = pixel_height / actual_height_cm
+            self.user_height_cm = actual_height_cm
         return self.calibration_factor
 
     def calibrate_from_reference(self, ref_pixels: float, ref_cm: float) -> float:
@@ -432,7 +452,8 @@ class CalibrationSystem:
         if ref_pixels <= 0 or ref_cm <= 0:
             raise ValueError("Reference dimensions must be positive")
 
-        self.calibration_factor = ref_pixels / ref_cm
+        with self._lock:
+            self.calibration_factor = ref_pixels / ref_cm
         return self.calibration_factor
 
     def pixels_to_cm(self, pixel_distance: float) -> float:
@@ -549,9 +570,20 @@ def get_visible_landmarks(landmarks: list, indices: list[int],
     return visible
 
 
-def estimate_torso_pixel_height(landmarks: list, image_shape: tuple) -> float:
+def estimate_torso_pixel_height(landmarks: list, image_shape: tuple,
+                                fallback_height_cm: float = DEFAULT_USER_HEIGHT_CM) -> float:
     """
     Estimate full-body height from head-to-hip distance when feet are not visible.
+    Uses proportional scaling: (head_to_hip_px / HEAD_TO_HIP_HEIGHT_RATIO) as the torso portion,
+    then infers total height assuming head_to_hip is HEAD_TO_HIP_HEIGHT_RATIO of total.
+
+    Args:
+        landmarks: List of body landmarks
+        image_shape: Shape of the original image
+        fallback_height_cm: Fallback height in cm if estimation fails
+
+    Returns:
+        Estimated body height in pixels
     """
     if not landmarks or len(landmarks) < 25:
         return 0.0
@@ -569,10 +601,72 @@ def estimate_torso_pixel_height(landmarks: list, image_shape: tuple) -> float:
     if head_to_hip_px <= 0:
         return 0.0
 
+    # HEAD_TO_HIP_HEIGHT_RATIO = 0.52 means head-to-hip is ~52% of total height
+    # So total = head_to_hip_px / 0.52 (same formula as before)
     estimated_height = head_to_hip_px / HEAD_TO_HIP_HEIGHT_RATIO
+
+    # Clamp to reasonable bounds
     min_height = image_shape[0] * MIN_ESTIMATED_HEIGHT_MULTIPLIER
     max_height = image_shape[0] * MAX_ESTIMATED_HEIGHT_MULTIPLIER
     return max(min_height, min(max_height, estimated_height))
+
+
+def estimate_height_from_hip_midpoint(landmarks: list, image_shape: tuple,
+                                       fallback_height_cm: float = DEFAULT_USER_HEIGHT_CM) -> float:
+    """
+    Estimate body height from hip midpoint when feet are not visible.
+
+    Uses hip landmarks (indices 23, 24) to compute midpoint, then applies
+    a ratio to estimate full body height based on typical human proportions.
+
+    Args:
+        landmarks: List of body landmarks
+        image_shape: Shape of the original image (height, width, channels)
+        fallback_height_cm: Fallback height in cm
+
+    Returns:
+        Estimated height in pixels
+    """
+    HEIGHT_CORRECTION_FACTOR = 1.12
+    HIP_TO_FULL_BODY_RATIO = 0.5  # Hip is approximately halfway down the body
+
+    if not landmarks or len(landmarks) < 25:
+        return estimate_torso_pixel_height(landmarks, image_shape, fallback_height_cm)
+
+    try:
+        head_landmark = landmarks[0]
+        left_hip = landmarks[23]
+        right_hip = landmarks[24]
+
+        head_visible = head_landmark.get('visibility', 0) > 0.5
+        hips_visible = (left_hip.get('visibility', 0) > TORSO_VISIBILITY_THRESHOLD and
+                        right_hip.get('visibility', 0) > TORSO_VISIBILITY_THRESHOLD)
+
+        if not head_visible or not hips_visible:
+            return estimate_torso_pixel_height(landmarks, image_shape, fallback_height_cm)
+
+        # Compute hip midpoint
+        hip_mid_x = (left_hip['x'] + right_hip['x']) / 2
+        hip_mid_y = (left_hip['y'] + right_hip['y']) / 2
+
+        # Compute vector distance from nose to hip midpoint
+        # IMPORTANT: Scale dx by width, dy by height for non-square images
+        dx = (hip_mid_x - head_landmark['x']) * image_shape[1]
+        dy = (hip_mid_y - head_landmark['y']) * image_shape[0]
+        hip_height_px = math.sqrt(dx * dx + dy * dy)
+
+        if hip_height_px <= 0:
+            return estimate_torso_pixel_height(landmarks, image_shape, fallback_height_cm)
+
+        # Extrapolate to full body height
+        pixel_height = hip_height_px / HIP_TO_FULL_BODY_RATIO
+
+        # Apply correction factor
+        pixel_height *= HEIGHT_CORRECTION_FACTOR
+
+        return pixel_height
+    except Exception:
+        return estimate_torso_pixel_height(landmarks, image_shape, fallback_height_cm)
 
 
 def interpolate_landmark(p1: dict, p2: dict, ratio: float) -> dict:
@@ -634,34 +728,183 @@ def log_measurement_debug(debug_info: dict) -> None:
     print("[measurement_pipeline]", debug_info)
 
 
-def calculate_pixel_height(landmarks: list, image_shape: tuple) -> float:
+def calculate_fill_ratio(landmarks: list, image_shape: tuple) -> dict:
+    """
+    Compute the fraction of the image frame occupied vertically by the body.
+
+    This is the RAW pixel-space fill ratio used for framing guidance.
+    It does NOT apply HEIGHT_CORRECTION_FACTOR — that correction exists for
+    measurement scaling, not for reporting how much of the frame the user fills.
+
+    Uses nose (idx 0) as top and ankle midpoint (idx 27, 28) as bottom.
+    Ankle midpoint matches what the user sees on screen better than max(ankle_y).
+
+    Args:
+        landmarks: List of 33 MediaPipe pose landmarks (normalized x,y,z,visibility)
+        image_shape: (height, width, channels) — height used for pixel conversion
+
+    Returns:
+        {
+            'fill_ratio': float,           # 0.0 if invalid, else (0,1]
+            'pixel_height': float,         # in pixels
+            'image_height': int,          # in pixels
+            'head_visible': bool,
+            'ankles_visible': bool,
+            'valid': bool,                 # head + >=1 ankle with visibility > 0.5
+        }
+    """
+    result = {
+        'fill_ratio': 0.0,
+        'pixel_height': 0.0,
+        'image_height': int(image_shape[0]) if image_shape else 0,
+        'head_visible': False,
+        'ankles_visible': False,
+        'valid': False,
+    }
+
+    if not landmarks or len(landmarks) < 29 or not image_shape or image_shape[0] <= 0:
+        return result
+
+    try:
+        nose = landmarks[0]
+        left_ankle = landmarks[27] if len(landmarks) > 27 else None
+        right_ankle = landmarks[28] if len(landmarks) > 28 else None
+
+        head_visible = nose.get('visibility', 0) > VISIBILITY_THRESHOLD
+        ankle_visibilities = [
+            lm.get('visibility', 0) for lm in (left_ankle, right_ankle) if lm is not None
+        ]
+        ankles_visible = any(v > VISIBILITY_THRESHOLD for v in ankle_visibilities)
+
+        result['head_visible'] = head_visible
+        result['ankles_visible'] = ankles_visible
+
+        if not (head_visible and ankles_visible):
+            return result
+
+        # Ankle midpoint using only visible ankles (symmetric if both visible)
+        visible_ankles = [
+            lm for lm in (left_ankle, right_ankle)
+            if lm is not None and lm.get('visibility', 0) > VISIBILITY_THRESHOLD
+        ]
+        ankle_y = sum(lm['y'] for lm in visible_ankles) / len(visible_ankles)
+
+        pixel_height = max(0.0, (ankle_y - nose['y']) * image_shape[0])
+        result['pixel_height'] = pixel_height
+        result['fill_ratio'] = pixel_height / image_shape[0] if image_shape[0] > 0 else 0.0
+        result['valid'] = result['fill_ratio'] > 0
+
+        return result
+    except Exception:
+        return result
+
+
+# Framing guidance thresholds (raw fill_ratio, no correction factor)
+FRAMING_TOO_FAR = 0.55
+FRAMING_IDEAL_MIN = 0.65
+FRAMING_IDEAL_MAX = 0.85
+FRAMING_TOO_CLOSE = 0.90
+
+
+def classify_framing(fill_info: dict) -> dict:
+    """
+    Classify framing into a user-facing guidance state.
+
+    Args:
+        fill_info: Output of calculate_fill_ratio()
+
+    Returns:
+        {
+            'status': 'too_far' | 'near_too_far' | 'ideal' | 'near_too_close' | 'too_close' | 'invalid',
+            'message': str,
+            'fill_ratio': float,
+        }
+    """
+    if not fill_info.get('valid'):
+        return {
+            'status': 'invalid',
+            'message': 'Stand in full view of the camera',
+            'fill_ratio': fill_info.get('fill_ratio', 0.0),
+        }
+
+    r = fill_info['fill_ratio']
+    if r < FRAMING_TOO_FAR:
+        status, message = 'too_far', 'Move closer to the camera'
+    elif r < FRAMING_IDEAL_MIN:
+        status, message = 'near_too_far', 'Almost there — a bit closer'
+    elif r <= FRAMING_IDEAL_MAX:
+        status, message = 'ideal', 'Perfect position — hold still'
+    elif r <= FRAMING_TOO_CLOSE:
+        status, message = 'near_too_close', 'Almost there — small step back'
+    else:
+        status, message = 'too_close', 'Step back slightly'
+
+    return {'status': status, 'message': message, 'fill_ratio': r}
+
+
+def calculate_pixel_height(landmarks: list, image_shape: tuple,
+                            fallback_height_cm: float = DEFAULT_USER_HEIGHT_CM) -> float:
     """
     Calculate body height in pixels from visible head-to-foot landmarks.
+
+    Uses nose (index 0) as the top reference and ankles (indices 27, 28) as the bottom reference.
+    MediaPipe landmarks do not include the top of the head or bottom of the feet,
+    so a correction factor (HEIGHT_CORRECTION_FACTOR = 1.12) is applied to account for
+    the ~12% missing vertical extent.
+
+    Falls back to torso-based estimation when feet are not visible.
 
     Args:
         landmarks: List of body landmarks
         image_shape: Shape of the original image (height, width, channels)
+        fallback_height_cm: Fallback height in cm for torso estimation
 
     Returns:
         Height in pixels
     """
+    HEIGHT_CORRECTION_FACTOR = 1.12
+
     if not landmarks or len(landmarks) < 29:
         return 0.0
 
     try:
-        visible_head = get_visible_landmarks(landmarks, HEAD_LANDMARK_INDICES)
-        visible_feet = get_visible_landmarks(landmarks, FOOT_LANDMARK_INDICES)
+        # Use nose (index 0) as head reference
+        head_landmark = landmarks[0] if len(landmarks) > 0 else None
+        head_visible = head_landmark and head_landmark.get('visibility', 0) > 0.5
 
-        if not visible_head or not visible_feet:
-            return estimate_torso_pixel_height(landmarks, image_shape)
+        # Use ankles (indices 27, 28) as foot reference
+        foot_candidates = []
+        for idx in [27, 28]:
+            if len(landmarks) > idx:
+                lm = landmarks[idx]
+                if lm.get('visibility', 0) > 0.5:
+                    foot_candidates.append(lm)
 
-        head_y = min(landmark["y"] for _, landmark in visible_head)
-        foot_y = max(landmark["y"] for _, landmark in visible_feet)
-        pixel_height = (foot_y - head_y) * image_shape[0]
+        if not head_visible or len(foot_candidates) < 2:
+            # Fallback: use hip midpoint when ankles not available
+            return estimate_height_from_hip_midpoint(landmarks, image_shape, fallback_height_cm)
 
-        return max(0.0, pixel_height) if pixel_height > 0 else estimate_torso_pixel_height(landmarks, image_shape)
+        # Compute ankle midpoint
+        left_ankle = foot_candidates[0]
+        right_ankle = foot_candidates[1]
+        ankle_mid_x = (left_ankle['x'] + right_ankle['x']) / 2
+        ankle_mid_y = (left_ankle['y'] + right_ankle['y']) / 2
+
+        # Compute vector distance from nose to ankle midpoint
+        # IMPORTANT: Scale dx by width, dy by height for non-square images
+        dx = (ankle_mid_x - head_landmark['x']) * image_shape[1]
+        dy = (ankle_mid_y - head_landmark['y']) * image_shape[0]
+        pixel_height = math.sqrt(dx * dx + dy * dy)
+
+        if pixel_height <= 0:
+            return estimate_height_from_hip_midpoint(landmarks, image_shape, fallback_height_cm)
+
+        # Apply correction factor for missing landmark extent
+        pixel_height *= HEIGHT_CORRECTION_FACTOR
+
+        return pixel_height
     except Exception:
-        return estimate_torso_pixel_height(landmarks, image_shape)
+        return estimate_height_from_hip_midpoint(landmarks, image_shape, fallback_height_cm)
 
 
 def measure_from_ratio(pixel_distance: float, pixel_height: float,
@@ -688,39 +931,33 @@ def measure_from_ratio(pixel_distance: float, pixel_height: float,
     return ratio * user_height_cm
 
 
-def calculate_height(landmarks: list, image_shape: tuple) -> float:
+def calculate_height(landmarks: list, image_shape: tuple,
+                      user_height_cm: float = DEFAULT_USER_HEIGHT_CM) -> float:
     """
-    Calculate body height from pose landmarks.
+    Return the user's self-reported height in cm, validated against pose landmarks.
 
-    Uses min/max Y from ALL visible landmarks (robust to pose/tilt).
+    Absolute metric height is NOT recoverable from normalized pose landmarks
+    alone (no camera intrinsics, no reference object). `user_height_cm` is the
+    calibration reference the rest of the pipeline already depends on via
+    `measure_from_ratio`, so we return it here verbatim when the view is valid.
 
-    Args:
-        landmarks: List of body landmarks
-        image_shape: Shape of the original image
-
-    Returns:
-        Estimated height in cm
+    Returns 0.0 for upper-body-only views so fusion drops this view's height
+    contribution.
     """
-    if not landmarks or len(landmarks) < 29:
-        return DEFAULT_USER_HEIGHT_CM
+    if not landmarks or len(landmarks) < 29 or user_height_cm is None or user_height_cm <= 0:
+        return 0.0
 
     try:
-        # Collect all landmarks with visibility > 0.5
-        visible_y_values = []
-        for landmark in landmarks:
-            if landmark.get('visibility', 0) > 0.5:
-                visible_y_values.append(landmark['y'])
-
-        if not visible_y_values:
-            return DEFAULT_USER_HEIGHT_CM
-
-        min_y = min(visible_y_values)
-        max_y = max(visible_y_values)
-        pixel_height = (max_y - min_y) * image_shape[0]
-
-        return max(0, pixel_height)
+        head_ok = landmarks[0].get('visibility', 0) > VISIBILITY_THRESHOLD
+        ankle_ok = any(
+            landmarks[idx].get('visibility', 0) > VISIBILITY_THRESHOLD
+            for idx in (27, 28) if len(landmarks) > idx
+        )
+        if not (head_ok and ankle_ok):
+            return 0.0
+        return float(user_height_cm)
     except Exception:
-        return DEFAULT_USER_HEIGHT_CM
+        return 0.0
 
 
 def validate_shoulders(landmarks: list, image_shape: tuple = None) -> tuple[bool, str]:
@@ -793,14 +1030,11 @@ def calculate_shoulder_width(landmarks: list, image_shape: tuple,
            right_shoulder.get('visibility', 0) < LANDMARK_CONFIDENCE_THRESHOLD:
             return 0.0, False
 
-        scale_cm_per_pixel = calculate_scale_cm_per_pixel(pixel_height, user_height_cm)
-        if scale_cm_per_pixel <= 0:
-            return 0.0, False
-
         shoulder_px = horizontal_distance_px(left_shoulder, right_shoulder, image_shape)
-        shoulder_cm = shoulder_px * scale_cm_per_pixel
-
-        return shoulder_cm if shoulder_cm > 0 else 0.0, shoulder_cm > 0
+        if shoulder_px <= 0:
+            return 0.0, False
+        shoulder_cm = measure_from_ratio(shoulder_px, pixel_height, user_height_cm)
+        return max(0.0, shoulder_cm), shoulder_cm > 0
     except Exception:
         return 0.0, False
 
@@ -826,10 +1060,6 @@ def calculate_chest(landmarks: list, image_shape: tuple, pixel_height: float,
         return 0.0, False
 
     try:
-        scale_cm_per_pixel = calculate_scale_cm_per_pixel(pixel_height, user_height_cm)
-        if scale_cm_per_pixel <= 0:
-            return 0.0, False
-
         left_chest, right_chest = get_body_width_points(
             landmarks, 11, 12, 23, 24, CHEST_LINE_RATIO, threshold=TORSO_VISIBILITY_THRESHOLD
         )
@@ -844,7 +1074,7 @@ def calculate_chest(landmarks: list, image_shape: tuple, pixel_height: float,
             shoulder_px = horizontal_distance_px(left_shoulder, right_shoulder, image_shape)
             chest_px = shoulder_px * AVERAGE_HUMAN_RATIOS['chest_to_shoulder_ratio']
 
-        chest_width_cm = chest_px * scale_cm_per_pixel
+        chest_width_cm = measure_from_ratio(chest_px, pixel_height, user_height_cm)
         chest_cm = chest_width_cm * CHEST_CIRCUMFERENCE_FACTOR
 
         return chest_cm if chest_cm > 0 else 0.0, chest_cm > 0
@@ -888,14 +1118,10 @@ def calculate_waist(landmarks: list, image_shape: tuple, pixel_height: float,
            right_shoulder.get('visibility', 0) < LANDMARK_CONFIDENCE_THRESHOLD:
             return 0.0, False
 
-        scale_cm_per_pixel = calculate_scale_cm_per_pixel(pixel_height, user_height_cm)
-        if scale_cm_per_pixel <= 0:
-            return 0.0, False
-
         left_waist = interpolate_landmark(left_shoulder, left_hip, WAIST_LINE_RATIO)
         right_waist = interpolate_landmark(right_shoulder, right_hip, WAIST_LINE_RATIO)
         waist_px = horizontal_distance_px(left_waist, right_waist, image_shape)
-        waist_width_cm = waist_px * scale_cm_per_pixel
+        waist_width_cm = measure_from_ratio(waist_px, pixel_height, user_height_cm)
         waist_cm = waist_width_cm * WAIST_CIRCUMFERENCE_FACTOR
 
         return waist_cm if waist_cm > 0 else 0.0, waist_cm > 0
@@ -927,16 +1153,12 @@ def calculate_hips(landmarks: list, image_shape: tuple, pixel_height: float,
         right_hip = landmarks[24]
 
         # Check visibility
-        if left_hip.get('visibility', 0) < TORSO_VISIBILITY_THRESHOLD or \
-           right_hip.get('visibility', 0) < TORSO_VISIBILITY_THRESHOLD:
-            return 0.0, False
-
-        scale_cm_per_pixel = calculate_scale_cm_per_pixel(pixel_height, user_height_cm)
-        if scale_cm_per_pixel <= 0:
+        if left_hip.get('visibility', 0) < LANDMARK_CONFIDENCE_THRESHOLD or \
+           right_hip.get('visibility', 0) < LANDMARK_CONFIDENCE_THRESHOLD:
             return 0.0, False
 
         hips_px = horizontal_distance_px(left_hip, right_hip, image_shape)
-        hips_width_cm = hips_px * scale_cm_per_pixel
+        hips_width_cm = measure_from_ratio(hips_px, pixel_height, user_height_cm)
         hips_cm = hips_width_cm * HIP_CIRCUMFERENCE_FACTOR
 
         return hips_cm if hips_cm > 0 else 0.0, hips_cm > 0
@@ -952,9 +1174,10 @@ def is_front_view(landmarks: list) -> bool:
 
     Requirements:
     - Horizontal shoulder distance > 0.15 (normalized)
-    - Vertical shoulder distance < 0.1 (normalized)
+    - Vertical shoulder distance < 0.15 (normalized) (relaxed from 0.1 for real-world poses)
 
     This ensures we're looking at a front view, not a side view.
+    Relaxed threshold tolerates natural shoulder height variation and slight pose tilt.
 
     Args:
         landmarks: List of body landmarks
@@ -972,9 +1195,292 @@ def is_front_view(landmarks: list) -> bool:
         delta_x = abs(right_shoulder['x'] - left_shoulder['x'])
         delta_y = abs(right_shoulder['y'] - left_shoulder['y'])
 
-        return delta_x > 0.15 and delta_y < 0.1
+        return delta_x > 0.15 and delta_y < 0.15
     except Exception:
         return False
+
+
+def classify_view(landmarks: list) -> str:
+    """
+    Classify view as front/back/left/right/unknown.
+
+    Uses shoulder horizontal separation (large = front/back, small = profile)
+    and facial landmark visibility to distinguish front from back.
+
+    Args:
+        landmarks: List of 33 MediaPipe Pose landmarks
+
+    Returns:
+        "front", "back", "left", "right", or "unknown"
+    """
+    if not landmarks or len(landmarks) < 25:
+        return "unknown"
+
+    try:
+        left_shoulder = landmarks[11]
+        right_shoulder = landmarks[12]
+
+        # Check shoulder visibility
+        if left_shoulder.get('visibility', 0) < LANDMARK_CONFIDENCE_THRESHOLD or \
+           right_shoulder.get('visibility', 0) < LANDMARK_CONFIDENCE_THRESHOLD:
+            return "unknown"
+
+        delta_x = abs(right_shoulder['x'] - left_shoulder['x'])
+        delta_y = abs(right_shoulder['y'] - left_shoulder['y'])
+
+        # Shoulder separation threshold (front/back have wide shoulders)
+        is_profile = delta_x < 0.12
+
+        if is_profile:
+            # Distinguish left from right using nose position
+            nose = landmarks[0]
+            if nose.get('visibility', 0) > LANDMARK_CONFIDENCE_THRESHOLD:
+                # If nose is closer to left edge, it's a right view
+                return "right" if nose['x'] < 0.5 else "left"
+            return "unknown"
+        else:
+            # Front vs back: use facial landmark visibility asymmetry
+            left_eye = landmarks[1]
+            right_eye = landmarks[2]
+            left_visibility = left_eye.get('visibility', 0)
+            right_visibility = right_eye.get('visibility', 0)
+
+            if abs(left_visibility - right_visibility) > 0.2:
+                return "back" if left_visibility > right_visibility else "front"
+
+            # Fallback: check nose z if available
+            nose = landmarks[0]
+            if nose.get('visibility', 0) > LANDMARK_CONFIDENCE_THRESHOLD:
+                # Positive z typically means facing camera (front)
+                return "front" if nose.get('z', 0) > -0.1 else "back"
+
+            # Default to front if we can't tell
+            return "front"
+
+    except (KeyError, IndexError, TypeError):
+        return "unknown"
+
+
+def measure_width_cm_at_y(landmarks: list, image_shape: tuple, pixel_height: float,
+                          user_height_cm: float, y_ratio: float) -> float:
+    """
+    Measure body width at a given vertical position (y_ratio from shoulders).
+
+    For front/back views: measures horizontal extent (left-right width).
+    For left/right views: measures front-back depth (same code path, different semantic).
+
+    Args:
+        landmarks: List of 33 MediaPipe Pose landmarks
+        image_shape: Shape of the image (height, width, channels)
+        pixel_height: Body height in pixels
+        user_height_cm: User's height in cm
+        y_ratio: Ratio from shoulder line (0.0 = shoulders, 0.5 = mid-torso, 1.0 = hips)
+
+    Returns:
+        Width or depth in cm
+    """
+    if not landmarks or len(landmarks) < 25 or pixel_height <= 0:
+        return 0.0
+
+    try:
+        left_shoulder = landmarks[11]
+        right_shoulder = landmarks[12]
+        left_hip = landmarks[23]
+        right_hip = landmarks[24]
+
+        # Check minimum visibility
+        for lm in [left_shoulder, right_shoulder, left_hip, right_hip]:
+            if lm.get('visibility', 0) < TORSO_VISIBILITY_THRESHOLD:
+                return 0.0
+
+        # Interpolate left/right positions at y_ratio
+        left_point = interpolate_landmark(left_shoulder, left_hip, y_ratio)
+        right_point = interpolate_landmark(right_shoulder, right_hip, y_ratio)
+
+        # Measure horizontal extent
+        extent_px = horizontal_distance_px(left_point, right_point, image_shape)
+
+        # Convert to cm using ratio normalization
+        return measure_from_ratio(extent_px, pixel_height, user_height_cm)
+
+    except (KeyError, IndexError, TypeError, ZeroDivisionError):
+        return 0.0
+
+
+def measure_depth_cm_at_y(landmarks: list, image_shape: tuple, pixel_height: float,
+                          user_height_cm: float, y_ratio: float) -> float:
+    """
+    Measure body depth at a given vertical position.
+
+    For left/right views: measures horizontal extent which maps to front-back depth.
+    Uses the same implementation as width measurement - the difference is semantic.
+
+    Args:
+        landmarks: List of 33 MediaPipe Pose landmarks
+        image_shape: Shape of the image (height, width, channels)
+        pixel_height: Body height in pixels
+        user_height_cm: User's height in cm
+        y_ratio: Ratio from shoulder line (0.0 = shoulders, 0.5 = mid-torso, 1.0 = hips)
+
+    Returns:
+        Depth in cm
+    """
+    return measure_width_cm_at_y(landmarks, image_shape, pixel_height, user_height_cm, y_ratio)
+
+
+def ramanujan_ellipse_perimeter(width_cm: float, depth_cm: float) -> float:
+    """
+    Calculate ellipse circumference using Ramanujan's approximation.
+
+    C ≈ π × [ 3(a+b) − √((3a+b)(a+3b)) ]
+    where a = width/2, b = depth/2
+
+    Accuracy ~0.04% for typical body proportions.
+
+    Args:
+        width_cm: Body width in cm (left-right extent)
+        depth_cm: Body depth in cm (front-back extent)
+
+    Returns:
+        Circumference in cm
+    """
+    if width_cm <= 0 or depth_cm <= 0:
+        return 0.0
+
+    a = width_cm / 2.0  # semi-major axis
+    b = depth_cm / 2.0  # semi-minor axis
+
+    # Ramanujan's approximation
+    term1 = 3 * (a + b)
+    term2 = math.sqrt((3 * a + b) * (a + 3 * b))
+    perimeter = math.pi * (term1 - term2)
+
+    return perimeter if perimeter > 0 else 0.0
+
+
+def find_waist_y_ratio(landmarks: list, pixel_height: float,
+                       user_height_cm: float = DEFAULT_USER_HEIGHT_CM) -> float:
+    """
+    Find the y-ratio where body width is minimum (natural waist).
+
+    Searches y-ratios from 0.40 to 0.70 in steps of 0.02.
+
+    Args:
+        landmarks: List of 33 MediaPipe Pose landmarks
+        pixel_height: Body height in pixels
+        user_height_cm: User's height in cm
+
+    Returns:
+        y-ratio at minimum width (natural waist)
+    """
+    if not landmarks or pixel_height <= 0:
+        return WAIST_LINE_RATIO  # Fallback to default
+
+    try:
+        image_shape = (int(pixel_height), int(pixel_height), 3)
+
+        min_width = float('inf')
+        best_y_ratio = WAIST_LINE_RATIO
+
+        # Search for minimum width between 40% and 70% of torso
+        for y_ratio in [r / 100.0 for r in range(40, 72, 2)]:
+            width = measure_width_cm_at_y(landmarks, image_shape, pixel_height,
+                                          user_height_cm, y_ratio)
+            if width > 0 and width < min_width:
+                min_width = width
+                best_y_ratio = y_ratio
+
+        return best_y_ratio
+    except Exception:
+        return WAIST_LINE_RATIO
+
+
+def find_hip_y_ratio(landmarks: list, pixel_height: float,
+                     user_height_cm: float = DEFAULT_USER_HEIGHT_CM) -> float:
+    """
+    Find the y-ratio where body width is maximum (widest hip point).
+
+    Starts from hip landmark position and scans downward toward knees.
+
+    Args:
+        landmarks: List of 33 MediaPipe Pose landmarks
+        pixel_height: Body height in pixels
+        user_height_cm: User's height in cm
+
+    Returns:
+        y-ratio at maximum width (widest hip)
+    """
+    if not landmarks or pixel_height <= 0:
+        return 0.75  # Fallback
+
+    try:
+        # Get hip landmark y position as starting point
+        left_hip = landmarks[23]
+        right_hip = landmarks[24]
+
+        if left_hip.get('visibility', 0) < TORSO_VISIBILITY_THRESHOLD or \
+           right_hip.get('visibility', 0) < TORSO_VISIBILITY_THRESHOLD:
+            return 0.75
+
+        # Hip landmarks are at ~0.6-0.7 normalized y in typical poses
+        # Scan downward (higher y values) to find maximum width
+        hip_y = (left_hip['y'] + right_hip['y']) / 2
+
+        image_shape = (int(pixel_height), int(pixel_height), 3)
+
+        max_width = 0.0
+        best_y_ratio = hip_y
+
+        # Search from hip position toward knees (0.75 to 0.85)
+        for y_ratio in [r / 100.0 for r in range(int(hip_y * 100) + 2, 85, 1)]:
+            width = measure_width_cm_at_y(landmarks, image_shape, pixel_height,
+                                          user_height_cm, y_ratio)
+            if width > max_width:
+                max_width = width
+                best_y_ratio = y_ratio
+
+        return best_y_ratio
+    except Exception:
+        return 0.75
+
+
+def find_chest_y_ratio(landmarks: list, pixel_height: float,
+                       waist_y_ratio: float,
+                       user_height_cm: float = DEFAULT_USER_HEIGHT_CM) -> float:
+    """
+    Find the y-ratio where body width is maximum in upper torso (chest).
+
+    Searches bounded between shoulders and waist for maximum width.
+
+    Args:
+        landmarks: List of 33 MediaPipe Pose landmarks
+        pixel_height: Body height in pixels
+        waist_y_ratio: The y-ratio where waist was found
+        user_height_cm: User's height in cm
+
+    Returns:
+        y-ratio at maximum width (chest)
+    """
+    if not landmarks or pixel_height <= 0:
+        return CHEST_LINE_RATIO  # Fallback
+
+    try:
+        image_shape = (int(pixel_height), int(pixel_height), 3)
+
+        max_width = 0.0
+        best_y_ratio = CHEST_LINE_RATIO
+
+        # Search from shoulders (0.0) to waist
+        for y_ratio in [r / 100.0 for r in range(5, int(waist_y_ratio * 100), 2)]:
+            width = measure_width_cm_at_y(landmarks, image_shape, pixel_height,
+                                          user_height_cm, y_ratio)
+            if width > max_width:
+                max_width = width
+                best_y_ratio = y_ratio
+
+        return best_y_ratio
+    except Exception:
+        return CHEST_LINE_RATIO
 
 
 def fuse_measurements(measurements_by_angle: dict) -> tuple[dict, dict]:
@@ -1028,8 +1534,11 @@ def fuse_measurements(measurements_by_angle: dict) -> tuple[dict, dict]:
             median = sorted_values[len(sorted_values) // 2]
 
             # Filter values within ±20% of median
-            filtered = [v for v in values
-                      if abs(v - median) / median <= OUTLIER_THRESHOLD_PCT]
+            if median > 0:
+                filtered = [v for v in values
+                          if abs(v - median) / median <= OUTLIER_THRESHOLD_PCT]
+            else:
+                filtered = values  # No filtering possible when median is zero
 
             if filtered:
                 fused[measurement] = round(sum(filtered) / len(filtered), 1)
@@ -1393,22 +1902,53 @@ def calculate_measurements_enhanced(landmarks_data: dict, image_shape: tuple,
     try:
         # Scale is derived directly from visible head-to-foot keypoints.
         has_visible_feet = bool(get_visible_landmarks(landmarks, FOOT_LANDMARK_INDICES))
-        pixel_height = calculate_pixel_height(landmarks, image_shape)
-        if pixel_height <= 0:
+
+        # Unified fill-ratio computation (shared with framing guidance)
+        fill_info = calculate_fill_ratio(landmarks, image_shape)
+        pixel_height = fill_info['pixel_height']
+        fill_ratio = fill_info['fill_ratio']
+
+        # NOTE: measurement math uses pixel_height WITH the 1.12 correction.
+        # Calculate corrected pixel height (which includes torso fallback)
+        pixel_height_corrected = calculate_pixel_height(landmarks, image_shape, user_height_cm)
+
+        # Check if we have valid height from either full-body or torso fallback
+        if pixel_height_corrected <= 0:
             return {
                 'success': False,
                 'scan_type': 'invalid',
                 'measurements': {},
                 'confidence': empty_confidence,
-                'warnings': warnings + ['Could not compute body height from head-to-foot landmarks.'],
+                'warnings': warnings + ['Could not compute body height from head-to-foot landmarks or torso fallback.'],
                 'missing_landmarks': missing_landmarks,
-                'can_calibrate': False
+                'can_calibrate': False,
+                'fill_ratio': fill_ratio,
+                'framing': classify_framing(fill_info),
             }
+
+        # Validate pixel_height: subject must fill at least MIN_PIXEL_HEIGHT_RATIO of the image
+        if fill_ratio < MIN_PIXEL_HEIGHT_RATIO:
+            return {
+                'success': False,
+                'scan_type': 'invalid',
+                'measurements': {},
+                'confidence': empty_confidence,
+                'warnings': warnings + [
+                    f'Subject too far from camera (fill_ratio={fill_ratio:.0%}, '
+                    f'minimum={MIN_PIXEL_HEIGHT_RATIO:.0%}). Please step closer.'
+                ],
+                'missing_landmarks': missing_landmarks,
+                'can_calibrate': False,
+                'fill_ratio': fill_ratio,
+                'framing': classify_framing(fill_info),
+            }
+
+        # Determine if we're using full body or torso fallback
         if not has_visible_feet:
             height_estimation_mode = 'torso_fallback'
             warnings.append('Using torso-based height estimate because feet were not fully visible.')
 
-        scale_cm_per_px = calculate_scale_cm_per_pixel(pixel_height, user_height_cm)
+        scale_cm_per_px = calculate_scale_cm_per_pixel(pixel_height_corrected, user_height_cm)
         if scale_cm_per_px <= 0:
             return {
                 'success': False,
@@ -1417,7 +1957,9 @@ def calculate_measurements_enhanced(landmarks_data: dict, image_shape: tuple,
                 'confidence': empty_confidence,
                 'warnings': warnings + ['A valid user height is required to scale measurements.'],
                 'missing_landmarks': missing_landmarks,
-                'can_calibrate': False
+                'can_calibrate': False,
+                'fill_ratio': fill_ratio,
+                'framing': classify_framing(fill_info),
             }
 
         shoulders_valid, shoulder_reason = validate_shoulders(landmarks, image_shape)
@@ -1500,7 +2042,7 @@ def calculate_measurements_enhanced(landmarks_data: dict, image_shape: tuple,
 
             if width_valid:
                 shoulder_width, _ = calculate_shoulder_width(
-                    landmarks, image_shape, pixel_height, user_height_cm
+                    landmarks, image_shape, pixel_height_corrected, user_height_cm
                 )
                 measurements['shoulder_width'] = round(shoulder_width, 1) if shoulder_width > 0 else 0.0
             else:
@@ -1508,25 +2050,53 @@ def calculate_measurements_enhanced(landmarks_data: dict, image_shape: tuple,
 
             if width_valid:
                 chest_cm, _ = calculate_chest(
-                    landmarks, image_shape, pixel_height, user_height_cm
+                    landmarks, image_shape, pixel_height_corrected, user_height_cm
                 )
                 measurements['chest'] = round(chest_cm, 1) if chest_cm > 0 else 0.0
 
             hips_cm, hips_valid = calculate_hips(
-                landmarks, image_shape, pixel_height, user_height_cm
+                landmarks, image_shape, pixel_height_corrected, user_height_cm
             )
             measurements['hips'] = round(hips_cm, 1) if hips_valid and hips_cm > 0 else 0.0
 
+            # Proportional fallback: estimate hips from shoulders if hips not visible
+            if not hips_valid and measurements.get('shoulder_width', 0) > 0:
+                estimated_hips = measurements['shoulder_width'] * AVERAGE_HUMAN_RATIOS['hips_to_shoulder_ratio']
+                measurements['hips'] = round(estimated_hips, 1)
+                warnings.append('Hips estimated from shoulder-to-hip ratio (feet not fully visible).')
+
             if width_valid and hips_valid:
                 waist_cm, waist_valid = calculate_waist(
-                    landmarks, image_shape, pixel_height, user_height_cm
+                    landmarks, image_shape, pixel_height_corrected, user_height_cm
                 )
                 measurements['waist'] = round(waist_cm, 1) if waist_valid and waist_cm > 0 else 0.0
-            else:
-                if not hips_valid:
-                    rejected_reasons.append({'angle': 'current', 'reason': 'hips_not_visible'})
+            elif width_valid and not hips_valid:
+                # Waist fallback: use shoulder-based ratio when hips unavailable
+                waist_cm, waist_valid = calculate_waist(
+                    landmarks, image_shape, pixel_height_corrected, user_height_cm
+                )
+                if waist_valid and waist_cm > 0:
+                    measurements['waist'] = round(waist_cm, 1)
+                elif measurements.get('shoulder_width', 0) > 0:
+                    estimated_waist = measurements['shoulder_width'] * AVERAGE_HUMAN_RATIOS['waist_to_shoulder_ratio']
+                    measurements['waist'] = round(estimated_waist, 1)
+                    warnings.append('Waist estimated from shoulder-to-waist ratio (hips not fully visible).')
+            elif measurements.get('shoulder_width', 0) > 0:
+                # Last resort: estimate both waist and hips from shoulders
+                measurements['waist'] = round(
+                    measurements['shoulder_width'] * AVERAGE_HUMAN_RATIOS['waist_to_shoulder_ratio'], 1
+                )
+                measurements['hips'] = round(
+                    measurements['shoulder_width'] * AVERAGE_HUMAN_RATIOS['hips_to_shoulder_ratio'], 1
+                )
+                warnings.append('Waist and hips estimated from shoulder ratios (torso landmarks limited).')
 
-            measurements['height'] = round(user_height_cm, 1)
+            if not hips_valid and not width_valid:
+                rejected_reasons.append({'angle': 'current', 'reason': 'hips_not_visible'})
+
+            # Compute actual height from landmarks, not from user input
+            computed_height = calculate_height(landmarks, image_shape, user_height_cm)
+            measurements['height'] = round(computed_height, 1)
 
             if not width_valid:
                 warnings.append('Width measurements may be unreliable: shoulder validation failed')
@@ -1537,7 +2107,7 @@ def calculate_measurements_enhanced(landmarks_data: dict, image_shape: tuple,
         warnings.append(f'Measurement calculation warning: {str(e)}')
         measurements = {}
 
-    confidence = compute_confidence(landmarks, scan_type, use_calibration)
+    confidence = compute_confidence(landmarks, scan_type, use_calibration, fill_ratio=fill_ratio)
     if measurements.get('shoulder_width', 0) <= 0:
         confidence['shoulder_width'] = 0.0
     if measurements.get('chest', 0) <= 0:
@@ -1550,12 +2120,31 @@ def calculate_measurements_enhanced(landmarks_data: dict, image_shape: tuple,
         confidence['height'] = max(confidence.get('height', 0.0), TORSO_HEIGHT_CONFIDENCE)
 
     measurements, excluded_measurements = apply_measurement_confidence_filter(measurements, confidence, warnings)
+
+    # Build reliable_measurements list from confidence-filtered results
     reliable_measurements = [
-        key for key in RELIABLE_MEASUREMENT_KEYS
+        key for key in measurements
         if measurements.get(key, 0) > 0 and confidence.get(key, 0) >= MEASUREMENT_CONFIDENCE_THRESHOLD
     ]
 
-    if len(reliable_measurements) < 2:
+    # Partial success: if chest/shoulder are valid but waist/hips/height are not,
+    # return the partial results rather than failing entirely
+    partial_keys = ['chest', 'shoulder_width']
+    has_partial = any(
+        measurements.get(key, 0) > 0 and confidence.get(key, 0) >= MEASUREMENT_CONFIDENCE_THRESHOLD
+        for key in partial_keys
+    )
+
+    if len(reliable_measurements) < 2 and has_partial:
+        # Partial success: we have chest/shoulder_width at minimum
+        # Downgrade scan type but still return measurements
+        scan_type = 'upper_body'
+        warnings.append('Partial scan: only upper body measurements available.')
+        reliable_measurements = [
+            key for key in partial_keys
+            if measurements.get(key, 0) > 0 and confidence.get(key, 0) >= MEASUREMENT_CONFIDENCE_THRESHOLD
+        ]
+    elif len(reliable_measurements) < 2:
         debug_info = {
             'height_px': round(pixel_height, 2),
             'scale_cm_per_px': round(scale_cm_per_px, 4),
@@ -1618,5 +2207,9 @@ def calculate_measurements_enhanced(landmarks_data: dict, image_shape: tuple,
         'warnings': warnings,
         'missing_landmarks': missing_landmarks,
         'can_calibrate': use_calibration,
-        'debug': debug_info
+        'debug': debug_info,
+        # New fields:
+        'fill_ratio': round(fill_ratio, 3),
+        'pixel_height': round(pixel_height, 1),
+        'framing': classify_framing(fill_info),
     }

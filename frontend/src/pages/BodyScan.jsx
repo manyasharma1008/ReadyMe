@@ -2,10 +2,12 @@ import { useEffect, useRef, useState, useCallback } from "react"
 import { useNavigate } from "react-router-dom"
 import { useScanImage } from "../hooks"
 import { useMediaPipe } from "../hooks/useMediaPipe"
+import { useFramingGuidance } from "../hooks/useFramingGuidance"
 import { useApp } from "../context/AppContext"
 import { scanMeasureEnhanced, scanMeasureMultiple } from "../api"
 import LoadingSpinner from "../components/common/LoadingSpinner"
 import ErrorMessage from "../components/common/ErrorMessage"
+import { FramingOverlay } from "../components/FramingOverlay"
 
 // Validation utility
 const isValidHeight = (h) => {
@@ -248,6 +250,9 @@ function BodyScan() {
     stopDetection,
     clearLandmarks,
   } = useMediaPipe()
+
+  // Real-time framing guidance
+  const framing = useFramingGuidance(videoRef)
 
   // Use local error state for scan errors
   const displayError = localError || scanError || mediapipeError
@@ -903,6 +908,11 @@ function BodyScan() {
             className={`absolute inset-0 w-full h-full object-cover scale-x-[-1] ${mediapipeLoaded && !mediapipeLoading ? 'opacity-100' : 'opacity-0'} transition-opacity duration-300`}
           />
 
+          {/* Framing guidance overlay */}
+          {mediapipeLoaded && !mediapipeLoading && (
+            <FramingOverlay state={framing} />
+          )}
+
           {/* MediaPipe loading indicator */}
           {mediapipeLoading && (
             <div className="absolute inset-0 bg-black/50 flex flex-col items-center justify-center text-white">
@@ -1031,15 +1041,15 @@ function BodyScan() {
       {/* Capture Button */}
       <button
         onClick={startAutoCapture}
-        disabled={loading || countingDown || isCapturing}
+        disabled={loading || countingDown || isCapturing || framing.status !== 'ideal'}
         className={`mt-6 text-sm relative group transition-all duration-300 ${
-          loading || countingDown || isCapturing
+          loading || countingDown || isCapturing || framing.status !== 'ideal'
             ? "text-gray-400 cursor-not-allowed"
             : "text-charcoal-900"
         }`}
       >
         <span className="relative z-10">
-          {loading ? "Processing..." : isCapturing ? "Scanning..." : "Start Scan"}
+          {loading ? "Processing..." : isCapturing ? "Scanning..." : framing.status === 'ideal' ? "Start Scan" : "Waiting for good framing..."}
         </span>
 
         <span className="absolute left-0 bottom-0 w-0 h-[1px] bg-charcoal-900 transition-all duration-300 group-hover:w-full"></span>

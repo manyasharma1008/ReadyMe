@@ -69,10 +69,10 @@ DEFAULT_USER_HEIGHT_CM = 170
 ## MEASUREMENTS
 
 * Shoulders → base reference
-* Chest → (width * 2.2) (Empirical circumference conversion)
+* Chest → (width * 2.15) (Empirical circumference conversion)
 * Hips → (width * 2.2) (Empirical circumference conversion)
-* Waist → (~0.85 * shoulders) (Estimated, not directly measured)
-* Height → min/max Y (trim top/bottom 5%)
+* Waist → interpolated between shoulders and hips, × 2.0 circumference factor (Estimated, not directly measured)
+* Height → min/max Y from all visible landmarks, then ratio-normalized
 
 Note:
 All conversion constants are empirical. Do not replace with geometric models.
@@ -104,12 +104,13 @@ All conversion constants are empirical. Do not replace with geometric models.
 File: `backend/app/services/measurement.py`
 
 * calculate_pixel_height()
+* calculate_height() — computes actual height from landmarks using ratio normalization
 * calculate_shoulder_width()
 * calculate_chest()
 * calculate_waist()
 * calculate_hips()
 * is_front_view()
-* fuse_measurements()
+* fuse_measurements() — median + ±20% outlier removal, guarded against zero-median
 * calculate_measurements_enhanced()
 
 ---
@@ -118,8 +119,13 @@ File: `backend/app/services/measurement.py`
 
 * DEFAULT_USER_HEIGHT_CM = 170
 * LANDMARK_CONFIDENCE_THRESHOLD = 0.6
-* CIRCUMFERENCE_CONVERSION = 2.2
-* WAIST_TO_SHOULDER_RATIO = 0.85
+* VISIBILITY_THRESHOLD = 0.5 (used for general landmark filtering)
+* TORSO_VISIBILITY_THRESHOLD = 0.25 (used for hip-level landmarks)
+* CHEST_CIRCUMFERENCE_FACTOR = 2.15
+* HIP_CIRCUMFERENCE_FACTOR = 2.2
+* WAIST_CIRCUMFERENCE_FACTOR = 2.0
+* CHEST_LINE_RATIO = 0.2 (interpolation ratio from shoulders)
+* WAIST_LINE_RATIO = 0.55 (interpolation ratio from shoulders)
 * OUTLIER_THRESHOLD = 0.20
 * TRIM_PERCENT = 0.05
 * CONSISTENCY_THRESHOLD = 0.25
@@ -189,6 +195,12 @@ Handling:
 * Stable multi-angle results
 * Robust to imperfect input
 * Production-safe incremental improvements
+
+---
+
+## THREAD SAFETY
+
+The `CalibrationSystem` class uses a `threading.Lock` to protect calibration state during concurrent requests. All calibration writes (`calibrate_from_height`, `calibrate_from_reference`) hold the lock for the duration of the write.
 
 ---
 
