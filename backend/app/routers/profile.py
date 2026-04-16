@@ -6,21 +6,11 @@ Handles saving, retrieving, and updating user body measurements.
 from fastapi import APIRouter, HTTPException, Depends, status
 from datetime import datetime
 
-from app.db.supabase import get_supabase_client
+from app.db.supabase import supabase
 from app.models.schemas import ProfileSaveRequest, ProfileResponse, BodyMeasurements
 from app.auth.jwt_middleware import get_current_user, TokenData
 
 router = APIRouter()
-
-
-def require_supabase():
-    client = get_supabase_client()
-    if client is None:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Profile storage is not configured"
-        )
-    return client
 
 
 @router.post("/save", response_model=ProfileResponse, status_code=status.HTTP_201_CREATED)
@@ -55,14 +45,12 @@ async def save_profile(request: ProfileSaveRequest):
         }
 
         # Insert into database
-        db = require_supabase()
-        response = db.table("body_profiles").insert(profile_data).execute()
+        response = supabase.table("body_profiles").insert(profile_data).execute()
 
-        response_error = getattr(response, "error", None)
-        if response_error:
+        if response.error:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Failed to save profile: {response_error.message}"
+                detail=f"Failed to save profile: {response.error.message}"
             )
 
         if not response.data:
@@ -116,19 +104,17 @@ async def get_profile(current_user: TokenData = Depends(get_current_user)):
     """
     try:
         # Fetch the most recent profile for the authenticated user
-        db = require_supabase()
-        response = db.table("body_profiles") \
+        response = supabase.table("body_profiles") \
             .select("*") \
             .eq("user_id", current_user.user_id) \
             .order("created_at", desc=True) \
             .limit(1) \
             .execute()
 
-        response_error = getattr(response, "error", None)
-        if response_error:
+        if response.error:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Failed to fetch profile: {response_error.message}"
+                detail=f"Failed to fetch profile: {response.error.message}"
             )
 
         if not response.data:
@@ -188,19 +174,17 @@ async def update_profile(
     """
     try:
         # First, get the most recent profile
-        db = require_supabase()
-        existing = db.table("body_profiles") \
+        existing = supabase.table("body_profiles") \
             .select("*") \
             .eq("user_id", current_user.user_id) \
             .order("created_at", desc=True) \
             .limit(1) \
             .execute()
 
-        existing_error = getattr(existing, "error", None)
-        if existing_error:
+        if existing.error:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Failed to fetch profile: {existing_error.message}"
+                detail=f"Failed to fetch profile: {existing.error.message}"
             )
 
         if not existing.data:
@@ -223,16 +207,15 @@ async def update_profile(
         if name is not None:
             update_data["name"] = name
 
-        response = db.table("body_profiles") \
+        response = supabase.table("body_profiles") \
             .update(update_data) \
             .eq("id", profile_id) \
             .execute()
 
-        response_error = getattr(response, "error", None)
-        if response_error:
+        if response.error:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Failed to update profile: {response_error.message}"
+                detail=f"Failed to update profile: {response.error.message}"
             )
 
         if not response.data:

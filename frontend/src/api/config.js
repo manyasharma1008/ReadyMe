@@ -51,9 +51,6 @@ export const ENDPOINTS = {
 
   // Product endpoints
   PRODUCT_EXTRACT: '/product/extract',
-
-  // Virtual try-on endpoints
-  VTO_GENERATE: '/vto/generate',
 }
 
 // Default headers for JSON requests

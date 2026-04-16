@@ -33,7 +33,7 @@ export default function FeaturePanel({ currentLook, onTryOn }) {
       if (onTryOn) {
         onTryOn()
       } else {
-        navigate("/preview")
+        navigate("/camera")
       }
     }
   }

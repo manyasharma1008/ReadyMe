@@ -98,7 +98,7 @@ export async function apiClient(endpoint, options = {}, retryCount = 0, customTi
     if (isRetryable && retryCount < API_RETRIES) {
       console.log(`[API] Retrying... (${retryCount + 1}/${API_RETRIES})`);
       await new Promise(resolve => setTimeout(resolve, 1000 * (retryCount + 1))); // Exponential backoff
-      return apiClient(endpoint, options, retryCount + 1, timeout);
+      return apiClient(endpoint, options, retryCount + 1);
     }
 
     if (error.name === "AbortError") {
@@ -127,26 +127,13 @@ export function apiGet(endpoint) {
 
 // JSON POST request with optional custom timeout
 export function apiPost(endpoint, body, customTimeout = null) {
-  const bodyKeys = body && typeof body === "object" ? Object.keys(body) : [];
-  console.log(`[API POST] ${endpoint}`, bodyKeys.length ? { bodyKeys } : "");
+  // Debug: Log the payload being sent
+  console.log(`[API POST] ${endpoint}`, JSON.stringify(body, null, 2));
 
   const timeout = customTimeout || API_TIMEOUT;
 
   return apiClient(endpoint, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(body),
-  }, 0, timeout);
-}
-
-// JSON PUT request
-export function apiPut(endpoint, body, customTimeout = null) {
-  const timeout = customTimeout || API_TIMEOUT;
-
-  return apiClient(endpoint, {
-    method: "PUT",
     headers: {
       "Content-Type": "application/json",
     },

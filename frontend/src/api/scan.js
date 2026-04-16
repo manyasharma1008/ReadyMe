@@ -1,5 +1,5 @@
 import { ENDPOINTS } from "./config";
-import { apiGet, apiPost, apiPostFormData } from "./client";
+import { apiPost, apiPostFormData } from "./client";
 
 /**
  * Convert a File to base64 string
@@ -132,7 +132,7 @@ export async function visualizeLandmarks(base64String, userHeightCm = null, show
  * Get calibration status
  */
 export async function getCalibrationStatus() {
-  return apiGet(ENDPOINTS.SCAN_CALIBRATE_STATUS);
+  return apiPost(ENDPOINTS.SCAN_CALIBRATE_STATUS, {});
 }
 
 /**

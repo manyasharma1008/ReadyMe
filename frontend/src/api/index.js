@@ -12,7 +12,6 @@ export {
   apiClient,
   apiGet,
   apiPost,
-  apiPut,
   apiPostFormData,
   apiPostText,
 } from './client';

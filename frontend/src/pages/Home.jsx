@@ -16,8 +16,8 @@ export default function Home() {
   const navigate = useNavigate()
 
   const handleTryOn = () => {
-    navigate("/preview")
-  }
+  navigate("/camera")
+}
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
