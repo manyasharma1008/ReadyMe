@@ -6,3 +6,5 @@ models/weights/
 backend/app/models/weights/
 *.keras
 .worktrees/
+venv/
+.venv/
