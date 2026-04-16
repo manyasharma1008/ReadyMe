@@ -10,7 +10,6 @@ import Help from "./pages/Help"
 import CameraPermission from "./pages/CameraPermission"
 import BodyScan from "./pages/BodyScan"
 import SizeResult from "./pages/SizeResult"
-
 import PreviewRoom from "./components/PreviewRoom"
 
 function App() {
