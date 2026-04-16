@@ -63,6 +63,74 @@ MEASUREMENT_ALIASES = {
 }
 
 
+def looks_like_size_label(value: str) -> bool:
+    """Return True when the text looks like a real apparel size label."""
+    text = (value or "").strip().upper()
+    if not text:
+        return False
+
+    for patterns in SIZE_PATTERNS.values():
+        if text in patterns or text.replace(" ", "") in patterns:
+            return True
+
+    return bool(re.fullmatch(r"(XXXS|XXS|XS|S|M|L|XL|XXL|XXXL|4XL|5XL|\d{1,3}|W\d{2,3})", text))
+
+
+def looks_like_measurement_label(value: str) -> bool:
+    """Return True when the text looks like a measurement axis label."""
+    normalized = re.sub(r"[^a-z\s]", " ", (value or "").lower()).strip()
+    normalized = re.sub(r"\s+", " ", normalized)
+    if not normalized:
+        return False
+
+    return normalize_measurement_name(normalized) is not None
+
+
+def parse_numeric_range(value: str) -> tuple[Optional[float], Optional[float]]:
+    """Parse a measurement cell into min/max values."""
+    text = (value or "").replace(",", " ").strip()
+    if not text:
+        return None, None
+
+    range_match = re.search(r"(\d+(?:\.\d+)?)\s*[-–]\s*(\d+(?:\.\d+)?)", text)
+    if range_match:
+        return float(range_match.group(1)), float(range_match.group(2))
+
+    matches = re.findall(r"\d+(?:\.\d+)?", text)
+    if not matches:
+        return None, None
+
+    numeric_value = float(matches[0])
+    return numeric_value, numeric_value
+
+
+def build_size_entry(size_label: str, measurements: dict[str, tuple[Optional[float], Optional[float]]]) -> SizeChartEntry:
+    """Build a typed size chart entry from normalized measurements."""
+    entry = SizeChartEntry(size=size_label)
+
+    for measurement_name, (min_value, max_value) in measurements.items():
+        if min_value is None and max_value is None:
+            continue
+
+        if measurement_name == "chest":
+            entry.chest_min = min_value if min_value is not None else max_value
+            entry.chest_max = max_value if max_value is not None else min_value
+        elif measurement_name == "waist":
+            entry.waist_min = min_value if min_value is not None else max_value
+            entry.waist_max = max_value if max_value is not None else min_value
+        elif measurement_name == "hips":
+            entry.hips_min = min_value if min_value is not None else max_value
+            entry.hips_max = max_value if max_value is not None else min_value
+        elif measurement_name == "height":
+            entry.height_min = min_value if min_value is not None else max_value
+            entry.height_max = max_value if max_value is not None else min_value
+        elif measurement_name == "shoulder_width":
+            entry.shoulder_min = min_value if min_value is not None else max_value
+            entry.shoulder_max = max_value if max_value is not None else min_value
+
+    return entry
+
+
 def detect_platform(url: str) -> str:
     """Detect the e-commerce platform from URL."""
     url_lower = url.lower()
@@ -151,56 +219,125 @@ def detect_gender_from_url(url: str, html: str = "") -> Optional[str]:
 
 
 def parse_size_table_generic(table_html: str) -> list[dict]:
-    """Parse a generic HTML size table."""
+    """Parse a generic HTML size table in either row or column layout."""
     if not BEAUTIFULSOUP_AVAILABLE:
         return []
 
-    sizes = []
     try:
         soup = BeautifulSoup(table_html, "html.parser")
+        tables = soup.find_all("table")
+        all_rows: list[dict] = []
 
-        # Find all rows
-        rows = soup.find_all("tr")
-
-        for row in rows:
-            cells = row.find_all(["td", "th"])
-            if len(cells) < 2:
+        for table in tables:
+            rows = [
+                [cell.get_text(" ", strip=True) for cell in row.find_all(["td", "th"])]
+                for row in table.find_all("tr")
+            ]
+            rows = [row for row in rows if len(row) >= 2]
+            if len(rows) < 2:
                 continue
 
-            # First cell is usually the size label
-            size_label = cells[0].get_text(strip=True).upper()
+            row_oriented = _parse_rows_as_sizes(rows)
+            column_oriented = _parse_columns_as_sizes(rows)
+            best_rows = row_oriented if len(row_oriented) >= len(column_oriented) else column_oriented
+            all_rows.extend(best_rows)
 
-            # Check if it's a valid size
-            is_valid_size = False
-            for size_type, patterns in SIZE_PATTERNS.items():
-                if size_label in patterns or size_label.replace(" ", "") in patterns:
-                    is_valid_size = True
-                    break
+        deduped = []
+        seen = set()
+        for row in all_rows:
+            key = tuple(sorted(row.items()))
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(row)
 
-            if is_valid_size:
-                size_entry = {"size": size_label}
-
-                # Try to extract measurements from other cells
-                for i, cell in enumerate(cells[1:], 1):
-                    cell_text = cell.get_text(strip=True).lower()
-
-                    # Look for measurement patterns (e.g., "32-34", "32-36 inches")
-                    range_match = re.findall(r"(\d+(?:\.\d+)?)\s*[-–]\s*(\d+(?:\.\d+)?)", cell_text)
-                    if range_match:
-                        size_entry[f"min_{i}"] = float(range_match[0][0])
-                        size_entry[f"max_{i}"] = float(range_match[0][1])
-
-                    # Look for single values
-                    single_match = re.findall(r"(\d+(?:\.\d+)?)\s*(?:cm|inch|inches)?", cell_text)
-                    if single_match and f"min_{i}" not in size_entry:
-                        size_entry[f"value_{i}"] = float(single_match[0])
-
-                sizes.append(size_entry)
-
+        return deduped
     except Exception as e:
         print(f"Error parsing table: {e}")
+        return []
 
-    return sizes
+
+def _parse_rows_as_sizes(rows: list[list[str]]) -> list[dict]:
+    """Parse tables where each row is one size and columns are measurements."""
+    header_row = rows[0]
+    size_index = next((index for index, cell in enumerate(header_row) if looks_like_size_label(cell)), 0)
+    measurement_headers = [
+        (index, normalize_measurement_name(cell))
+        for index, cell in enumerate(header_row)
+        if index != size_index and normalize_measurement_name(cell)
+    ]
+
+    if not measurement_headers:
+        return []
+
+    parsed_rows = []
+    for row in rows[1:]:
+        if len(row) <= size_index:
+            continue
+
+        size_label = row[size_index].strip().upper()
+        if not looks_like_size_label(size_label):
+            continue
+
+        measurements: dict[str, tuple[Optional[float], Optional[float]]] = {}
+        for column_index, measurement_name in measurement_headers:
+            if column_index >= len(row):
+                continue
+            min_value, max_value = parse_numeric_range(row[column_index])
+            if measurement_name and (min_value is not None or max_value is not None):
+                measurements[measurement_name] = (min_value, max_value)
+
+        if measurements:
+            entry = build_size_entry(size_label, measurements)
+            parsed_rows.append(entry.dict())
+
+    return parsed_rows
+
+
+def _parse_columns_as_sizes(rows: list[list[str]]) -> list[dict]:
+    """Parse tables where sizes are across the top row and measurements are rows."""
+    header_row = rows[0]
+    size_columns = [
+        (index, cell.strip().upper())
+        for index, cell in enumerate(header_row[1:], 1)
+        if looks_like_size_label(cell)
+    ]
+
+    if not size_columns:
+        return []
+
+    measurement_rows = []
+    for row in rows[1:]:
+        if not row:
+            continue
+        measurement_name = normalize_measurement_name(row[0])
+        if not measurement_name:
+            continue
+        measurement_rows.append((measurement_name, row))
+
+    if not measurement_rows:
+        return []
+
+    parsed_entries: dict[str, dict[str, tuple[Optional[float], Optional[float]]]] = {
+        size_label: {} for _, size_label in size_columns
+    }
+
+    for measurement_name, row in measurement_rows:
+        for column_index, size_label in size_columns:
+            if column_index >= len(row):
+                continue
+            min_value, max_value = parse_numeric_range(row[column_index])
+            if min_value is None and max_value is None:
+                continue
+            parsed_entries[size_label][measurement_name] = (min_value, max_value)
+
+    parsed_rows = []
+    for size_label, measurements in parsed_entries.items():
+        if measurements:
+            entry = build_size_entry(size_label, measurements)
+            parsed_rows.append(entry.dict())
+
+    return parsed_rows
 
 
 def extract_size_chart_amazon(html: str) -> Optional[SizeChart]:
@@ -429,6 +566,112 @@ def extract_size_chart_flipkart(html: str) -> SizeChart:
     return None
 
 
+def extract_size_chart_from_text(text: str, category: str, gender: Optional[str]) -> Optional[SizeChart]:
+    """Extract size chart data from loose page text."""
+    normalized_text = re.sub(r"\s+", "\n", text or "")
+    lines = [line.strip() for line in normalized_text.splitlines() if line.strip()]
+
+    if len(lines) < 3:
+        return None
+
+    size_labels = re.compile(r"\b(XXXS|XXS|XS|S|M|L|XL|XXL|XXXL|4XL|5XL|\d{2,3})\b", re.I)
+    measurement_hints = list(MEASUREMENT_ALIASES.keys())
+    extracted_entries: list[SizeChartEntry] = []
+
+    for line in lines[:120]:
+        lowered = line.lower()
+        if not size_labels.search(line):
+            continue
+        if not any(hint in lowered for hint in measurement_hints):
+            continue
+
+        measurements: dict[str, tuple[Optional[float], Optional[float]]] = {}
+        labels = size_labels.findall(line)
+        for hint in measurement_hints:
+            index = lowered.find(hint)
+            if index < 0:
+                continue
+            min_value, max_value = parse_numeric_range(line[index:index + 90])
+            if min_value is not None or max_value is not None:
+                measurements[normalize_measurement_name(hint)] = (min_value, max_value)
+
+        for label in labels:
+            if measurements:
+                extracted_entries.append(build_size_entry(label.upper(), measurements))
+
+    deduped: list[SizeChartEntry] = []
+    seen = set()
+    for entry in extracted_entries:
+        key = entry.size + str(entry.dict())
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(entry)
+
+    if len(deduped) < 2:
+        return None
+
+    return SizeChart(
+        brand="Generic Web",
+        category=category,
+        sizes=deduped[:12],
+        gender=gender
+    )
+
+
+def extract_size_chart_generic(html: str, category: str, gender: Optional[str]) -> Optional[SizeChart]:
+    """Try multiple generic extraction strategies for any product page."""
+    if not BEAUTIFULSOUP_AVAILABLE:
+        return None
+
+    try:
+        soup = BeautifulSoup(html, "html.parser")
+        table_selectors = [
+            "table",
+            '[role="dialog"] table',
+            ".modal table",
+            ".popup table",
+            ".drawer table",
+            ".sheet table",
+            '[class*="size"] table',
+            '[id*="size"] table',
+            '[data-testid*="size"] table',
+        ]
+
+        table_candidates = []
+        for selector in table_selectors:
+            for table in soup.select(selector)[:10]:
+                parsed_rows = parse_size_table_generic(str(table))
+                if parsed_rows:
+                    table_candidates.append(parsed_rows)
+
+        if not table_candidates:
+            for table in soup.find_all("table")[:20]:
+                parsed_rows = parse_size_table_generic(str(table))
+                if parsed_rows:
+                    table_candidates.append(parsed_rows)
+
+        if table_candidates:
+            best_rows = max(table_candidates, key=len)
+            size_entries = [SizeChartEntry(**row) for row in best_rows if row.get("size")]
+            if len(size_entries) >= 2:
+                return SizeChart(
+                    brand="Generic Web",
+                    category=category,
+                    sizes=size_entries,
+                    gender=gender
+                )
+
+        text_chart = extract_size_chart_from_text(soup.get_text("\n", strip=True), category, gender)
+        if text_chart:
+            return text_chart
+
+    except Exception as e:
+        print(f"Error extracting generic size chart: {e}")
+
+    return None
+
+
 def create_fallback_size_chart(category: str, gender: str = "men") -> SizeChart:
     """Create a basic size chart when extraction fails."""
     # Use standard chart as fallback
@@ -606,13 +849,31 @@ async def extract_product_size_chart(request: ProductExtractRequest):
         elif platform == "flipkart":
             size_chart = extract_size_chart_flipkart(html)
         else:
-            # Try generic extraction
-            size_chart = extract_size_chart_myntra(html)  # Try Myntra format as fallback
+            size_chart = None
 
-        # Use fallback if no chart found
         if not size_chart or not size_chart.sizes:
-            size_chart = create_fallback_size_chart(category, gender or "men")
-            warnings.append(f"Could not extract size chart from {platform}. Using standard {gender or 'men'} {category} chart.")
+            size_chart = extract_size_chart_generic(html, category, gender)
+
+        # Use fallback only when explicitly allowed
+        if not size_chart or not size_chart.sizes:
+            warnings.append(f"Could not extract a real size chart from {platform}.")
+            if request.use_standard_chart:
+                size_chart = create_fallback_size_chart(category, gender or "men")
+                warnings.append(f"Using standard {gender or 'men'} {category} chart as fallback.")
+            else:
+                return ProductExtractResponse(
+                    success=False,
+                    product=ProductInfo(
+                        name=product_name,
+                        brand=brand,
+                        category=category,
+                        gender=gender,
+                        url=request.url
+                    ),
+                    size_chart=None,
+                    message=f"No real size chart could be extracted from {platform}",
+                    warnings=warnings
+                )
 
         # Update chart with detected info
         if size_chart:

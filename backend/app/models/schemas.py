@@ -152,6 +152,10 @@ class ProductExtractRequest(BaseModel):
     """Request for extracting size chart from product URL."""
     url: str = Field(..., description="Product page URL (Amazon, Myntra, Flipkart)")
     category: Optional[str] = Field(None, description="Expected garment category")
+    use_standard_chart: bool = Field(
+        True,
+        description="Fallback to a standard chart if no brand-specific chart can be extracted"
+    )
 
 
 class ProductInfo(BaseModel):
