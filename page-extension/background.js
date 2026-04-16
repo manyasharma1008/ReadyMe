@@ -81,9 +81,38 @@ async function getBackendStatus() {
   }
 }
 
+async function extractChartFromUrl(payload) {
+  const response = await postJson("/product/extract", {
+    url: payload.product.url,
+    category: payload.product.category || null,
+    use_standard_chart: false,
+  });
+
+  if (!response?.success || !response?.size_chart?.sizes?.length) {
+    throw new Error(response?.message || "Backend could not extract a real size chart");
+  }
+
+  return response;
+}
+
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === "BACKEND_STATUS") {
     getBackendStatus().then((status) => sendResponse(status));
+    return true;
+  }
+
+  if (request.action === "EXTRACT_SIZE_CHART_FROM_URL") {
+    console.log("[ReadyMe] Falling back to backend URL extraction:", request.payload);
+    extractChartFromUrl(request.payload)
+      .then((result) => {
+        console.log("[ReadyMe] Backend URL extraction result:", result);
+        sendResponse({ success: true, result });
+      })
+      .catch((error) => {
+        console.error("[ReadyMe] Backend URL extraction failed:", error);
+        sendResponse({ success: false, error: error.message || "Backend URL extraction failed" });
+      });
+
     return true;
   }
 
@@ -105,4 +134,3 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
   return true;
 });
-
