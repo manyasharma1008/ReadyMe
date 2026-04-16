@@ -8,6 +8,25 @@ import FeaturePanel from '../components/FeaturePanel'
 
 const SLIDE_DURATION_MS = 6000
 
+function buildDemoPreviewData(activeThumb) {
+  const fallbackImage =
+    activeThumb?.src ||
+    "https://images.unsplash.com/photo-1515886657613-9f3515b0c78f?w=800&q=90"
+
+  return {
+    productImage: fallbackImage,
+    productName: activeThumb?.alt || "ReadyMe Demo Look",
+    selectedSize: "M",
+    recommendedSize: "M",
+    userImages: {
+      front: "https://images.unsplash.com/photo-1529139574466-a303027c1d8b?w=900&q=90",
+      back: "https://images.unsplash.com/photo-1496747611176-843222e1e57c?w=900&q=90",
+      left: "https://images.unsplash.com/photo-1524504388940-b1c1722653e1?w=900&q=90",
+      right: "https://images.unsplash.com/photo-1483985988355-763728e1935b?w=900&q=90",
+    },
+  }
+}
+
 export default function Home() {
 
   const [activeThumb, setActiveThumb] = useState(THUMBS[0])
@@ -16,8 +35,21 @@ export default function Home() {
   const navigate = useNavigate()
 
   const handleTryOn = () => {
-  navigate("/camera")
-}
+    navigate("/camera")
+  }
+
+  const handlePreview = () => {
+    if (localStorage.getItem("bodyScanDone") === "true") {
+      navigate("/preview")
+      return
+    }
+
+    navigate("/preview", {
+      state: {
+        previewData: buildDemoPreviewData(activeThumb),
+      },
+    })
+  }
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
@@ -29,18 +61,14 @@ export default function Home() {
         console.log("PRODUCT FROM EXTENSION:", product)
         localStorage.setItem("productData", JSON.stringify(product))
         navigate("/preview")
-      } catch (err) {
+      } catch (error) {
         console.error("Invalid product data")
       }
     }
 
     // ✅ check scan status
-    const scanned = localStorage.getItem("bodyScanDone")
-    if (scanned === "true") {
-      setIsScanned(true)
-    }
-
-  }, [])
+    setIsScanned(localStorage.getItem("bodyScanDone") === "true")
+  }, [navigate])
 
   useEffect(() => {
     if (THUMBS.length <= 1) return
@@ -79,6 +107,7 @@ export default function Home() {
               slideDuration={SLIDE_DURATION_MS}
               onSelectImage={setActiveThumb}
               isScanned={isScanned}
+              onPreview={handlePreview}
             />
           </section>
 
@@ -105,6 +134,7 @@ export default function Home() {
             slideDuration={SLIDE_DURATION_MS}
             onSelectImage={setActiveThumb}
             isScanned={isScanned}
+            onPreview={handlePreview}
           />
 
           <div className="flex gap-3 overflow-x-auto thumb-scroll pb-2">

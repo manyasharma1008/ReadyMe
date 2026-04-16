@@ -31,6 +31,15 @@ export {
   getSupportedImageTypes,
 } from './scan';
 
+// Preview API
+export {
+  PREVIEW_VIEWS,
+  generateTryOnImages,
+  normalizePreviewProduct,
+  resolveFitLabel,
+  buildPreviewFitContext,
+} from './preview';
+
 // Profile API
 export {
   saveProfile,
