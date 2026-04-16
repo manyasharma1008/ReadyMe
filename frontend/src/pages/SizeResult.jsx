@@ -6,42 +6,6 @@ import { saveProfile } from "../api"
 import LoadingSpinner from "../components/common/LoadingSpinner"
 import ErrorMessage from "../components/common/ErrorMessage"
 
-const MEASUREMENT_LIMITS = {
-  height: { min: 100, max: 250 },
-  chest: { min: 40, max: 180 },
-  waist: { min: 40, max: 180 },
-  hips: { min: 40, max: 200 },
-  shoulder_width: { min: 20, max: 80 },
-}
-
-function parseMeasurementValue(value, fallback = 0) {
-  if (value === '' || value === null || value === undefined) return fallback
-  const numericValue = Number(value)
-  return Number.isFinite(numericValue) ? numericValue : NaN
-}
-
-function validateManualMeasurements(measurements) {
-  const usableMeasurements = Object.values(measurements).filter(value => Number.isFinite(value) && value > 0)
-  if (usableMeasurements.length < 2) {
-    return 'Enter at least two valid measurements before getting a recommendation.'
-  }
-
-  for (const [key, value] of Object.entries(measurements)) {
-    if (!Number.isFinite(value)) {
-      return 'Use numbers only for measurements.'
-    }
-
-    if (value <= 0) continue
-
-    const limits = MEASUREMENT_LIMITS[key]
-    if (limits && (value < limits.min || value > limits.max)) {
-      return `${key.replace('_', ' ')} should be between ${limits.min} and ${limits.max} cm.`
-    }
-  }
-
-  return null
-}
-
 function SizeResult() {
 
   const navigate = useNavigate()
@@ -54,9 +18,7 @@ function SizeResult() {
     confidenceScores,
     warnings,
     scanClassification,
-    setRecommendations,
-    clearRecommendations,
-    clearScanImages
+    clearRecommendations
   } = useApp()
   const { recommendations, predict, loading, error, clearError, clear: clearPrediction } = useSizePrediction()
 
@@ -70,7 +32,6 @@ function SizeResult() {
   })
   const [profileSaving, setProfileSaving] = useState(false)
   const [profileSaved, setProfileSaved] = useState(false)
-  const [manualError, setManualError] = useState(null)
 
   // Track if we've cleaned up recommendations for this manual session
   const hasCleanedUpForManual = useRef(false)
@@ -100,14 +61,12 @@ function SizeResult() {
         predict(measurements, {
           category: preferences.category || 'shirts',
           gender: preferences.gender || 'men',
-        }).then((result) => {
-          if (result) setRecommendations(result)
         })
       } else {
         console.warn("Invalid measurements - not calling predict:", measurements)
       }
     }
-  }, [measurements, recommendations, predict, preferences, isManualMode, setRecommendations])
+  }, [measurements, recommendations, predict, preferences, isManualMode])
 
   // Clear stale recommendations once when entering manual mode (not on every recommendation change)
   useEffect(() => {
@@ -142,9 +101,11 @@ function SizeResult() {
     }
   }, [isManualMode, measurements])
 
+  // Use measurements from context or manual input
+  const displayMeasurements = isManualMode ? manualMeasurements : measurements
+
   // Handle manual input changes
   const handleManualChange = (field, value) => {
-    setManualError(null)
     setManualMeasurements(prev => ({
       ...prev,
       [field]: value
@@ -155,27 +116,20 @@ function SizeResult() {
   const handleManualSubmit = async () => {
     // Convert string values to numbers, preserving existing values for empty fields
     const numericMeasurements = {
-      height: parseMeasurementValue(manualMeasurements.height, measurements?.height || 0),
-      chest: parseMeasurementValue(manualMeasurements.chest, measurements?.chest || 0),
-      waist: parseMeasurementValue(manualMeasurements.waist, measurements?.waist || 0),
-      hips: parseMeasurementValue(manualMeasurements.hips, measurements?.hips || 0),
-      shoulder_width: parseMeasurementValue(manualMeasurements.shoulder_width, measurements?.shoulder_width || 0)
-    }
-
-    const validationError = validateManualMeasurements(numericMeasurements)
-    if (validationError) {
-      setManualError(validationError)
-      return
+      height: manualMeasurements.height ? parseFloat(manualMeasurements.height) : (measurements?.height || 0),
+      chest: manualMeasurements.chest ? parseFloat(manualMeasurements.chest) : (measurements?.chest || 0),
+      waist: manualMeasurements.waist ? parseFloat(manualMeasurements.waist) : (measurements?.waist || 0),
+      hips: manualMeasurements.hips ? parseFloat(manualMeasurements.hips) : (measurements?.hips || 0),
+      shoulder_width: manualMeasurements.shoulder_width ? parseFloat(manualMeasurements.shoulder_width) : (measurements?.shoulder_width || 0)
     }
 
     // Write to context to establish single source of truth
     setMeasurements(numericMeasurements)
 
-    const result = await predict(numericMeasurements, {
+    await predict(numericMeasurements, {
       category: preferences.category,
       gender: preferences.gender,
     })
-    if (result) setRecommendations(result)
   }
 
   // Retry prediction
@@ -185,8 +139,6 @@ function SizeResult() {
       predict(measurements, {
         category: preferences.category,
         gender: preferences.gender,
-      }).then((result) => {
-        if (result) setRecommendations(result)
       })
     }
   }
@@ -203,20 +155,16 @@ function SizeResult() {
     clearError()
 
     if (measurements && !isManualMode) {
-      const result = await predict(measurements, {
+      await predict(measurements, {
         category: nextPreferences.category,
         gender: nextPreferences.gender,
       })
-      if (result) setRecommendations(result)
     }
   }
 
   // Scan again
   const handleScanAgain = () => {
     clearMeasurements()
-    clearScanImages()
-    clearRecommendations()
-    clearPrediction()
     navigate("/camera")
   }
 
@@ -351,9 +299,6 @@ function SizeResult() {
                   <label className="block text-sm text-gray-600 mb-1">{label}</label>
                   <input
                     type="number"
-                    min={MEASUREMENT_LIMITS[key]?.min}
-                    max={MEASUREMENT_LIMITS[key]?.max}
-                    step="0.1"
                     value={manualMeasurements[key]}
                     onChange={(e) => handleManualChange(key, e.target.value)}
                     className="w-full border rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-clay"
@@ -362,9 +307,6 @@ function SizeResult() {
                 </div>
               ))}
               <div className="col-span-2 mt-2">
-                {manualError && (
-                  <p className="text-sm text-red-600 mb-2">{manualError}</p>
-                )}
                 <button
                   onClick={handleManualSubmit}
                   disabled={loading}
@@ -467,7 +409,8 @@ function SizeResult() {
           </button>
           <button
             onClick={() => navigate("/preview")}
-            className="px-6 py-2 bg-clay text-white rounded-lg hover:bg-opacity-90 transition-colors"
+            disabled={!recommendations}
+            className="px-6 py-2 bg-clay text-white rounded-lg hover:bg-opacity-90 transition-colors disabled:opacity-50"
           >
             Explore Virtual Try-On
           </button>

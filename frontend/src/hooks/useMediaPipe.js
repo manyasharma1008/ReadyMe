@@ -11,7 +11,6 @@ export function useMediaPipe() {
   const landmarkerRef = useRef(null);
   const lastVideoTimeRef = useRef(-1);
   const animationFrameRef = useRef(null);
-  const detectingRef = useRef(false);
 
   // Initialize the MediaPipe Pose model
   useEffect(() => {
@@ -51,7 +50,6 @@ export function useMediaPipe() {
 
     return () => {
       // Cleanup
-      detectingRef.current = false;
       if (animationFrameRef.current) {
         cancelAnimationFrame(animationFrameRef.current);
       }
@@ -111,19 +109,14 @@ export function useMediaPipe() {
   const startDetection = useCallback((video, onLandmarks) => {
     if (!video || !isLoaded) return;
 
-    detectingRef.current = true;
     setIsDetecting(true);
-    if (animationFrameRef.current) {
-      cancelAnimationFrame(animationFrameRef.current);
-      animationFrameRef.current = null;
-    }
 
     function detectFrame() {
-      if (!detectingRef.current) return;
+      if (!isDetecting) return;
 
       const detectedLandmarks = detectLandmarks(video);
 
-      if (onLandmarks) {
+      if (detectedLandmarks && onLandmarks) {
         onLandmarks(detectedLandmarks);
       }
 
@@ -132,11 +125,10 @@ export function useMediaPipe() {
     }
 
     detectFrame();
-  }, [isLoaded, detectLandmarks]);
+  }, [isLoaded, detectLandmarks, isDetecting]);
 
   // Stop continuous detection
   const stopDetection = useCallback(() => {
-    detectingRef.current = false;
     setIsDetecting(false);
     if (animationFrameRef.current) {
       cancelAnimationFrame(animationFrameRef.current);

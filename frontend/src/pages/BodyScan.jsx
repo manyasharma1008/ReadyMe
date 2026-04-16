@@ -30,14 +30,6 @@ const getKeypointsDetected = (response) => {
   return 0
 }
 
-const summarizeScanResponse = (response) => ({
-  success: response?.success,
-  scan_type: response?.scan_type,
-  keypoints: getKeypointsDetected(response),
-  hasMeasurements: Boolean(response?.measurements),
-  warnings: response?.warnings || [],
-})
-
 // Clear cached height from localStorage
 const clearHeight = () => {
   localStorage.removeItem("userHeight")
@@ -74,6 +66,15 @@ const LANDMARK_COLORS = {
   14: '#800080',     // Right elbow - Purple
   15: '#008080',     // Left wrist - Teal
   16: '#008080',     // Right wrist - Teal
+}
+
+// Mirror landmarks horizontally (x -> 1 - x) to compensate for mirrored video feed
+function mirrorLandmarks(landmarks) {
+  if (!landmarks || landmarks.length === 0) return landmarks
+  return landmarks.map(point => ({
+    ...point,
+    x: 1 - point.x
+  }))
 }
 
 function drawLandmarksOnCanvas(canvas, video, landmarks, width, height) {
@@ -147,6 +148,66 @@ function drawLandmarksOnCanvas(canvas, video, landmarks, width, height) {
   })
 }
 
+// Draw landmarks on a static image (not video)
+function drawLandmarksOnStaticImage(canvas, imageSrc, landmarks, width, height) {
+  if (!canvas) return
+
+  const ctx = canvas.getContext('2d')
+  canvas.width = width
+  canvas.height = height
+
+  // Draw the image
+  const img = new Image()
+  img.src = imageSrc
+
+  img.onload = () => {
+    ctx.drawImage(img, 0, 0, width, height)
+
+    if (!landmarks || landmarks.length === 0) return
+
+    // Use landmarks directly - CSS scale-x-[-1] handles mirroring
+    const mirroredLandmarks = landmarks
+
+    // Draw connections
+    const connections = [
+      [11, 12], [23, 24], [11, 23], [12, 24],
+      [23, 25], [25, 27], [24, 26], [26, 28],
+      [11, 13], [13, 15], [12, 14], [14, 16],
+    ]
+
+    ctx.strokeStyle = 'rgba(0, 255, 255, 0.8)'
+    ctx.lineWidth = 2
+
+    connections.forEach(([startIdx, endIdx]) => {
+      if (startIdx < mirroredLandmarks.length && endIdx < mirroredLandmarks.length) {
+        const start = mirroredLandmarks[startIdx]
+        const end = mirroredLandmarks[endIdx]
+        ctx.beginPath()
+        ctx.moveTo(start.x * width, start.y * height)
+        ctx.lineTo(end.x * width, end.y * height)
+        ctx.stroke()
+      }
+    })
+
+    // Draw landmark points
+    mirroredLandmarks.forEach((landmark, index) => {
+      const x = landmark.x * width
+      const y = landmark.y * height
+      const color = LANDMARK_COLORS[index] || '#ffffff'
+
+      ctx.beginPath()
+      ctx.arc(x, y, 10, 0, 2 * Math.PI)
+      ctx.fillStyle = color
+      ctx.fill()
+
+      ctx.beginPath()
+      ctx.arc(x, y, 5, 0, 2 * Math.PI)
+      ctx.fillStyle = '#ffffff'
+      ctx.fill()
+    })
+  }
+}
+
 function BodyScan() {
 
   const videoRef = useRef(null)
@@ -157,6 +218,8 @@ function BodyScan() {
   const navigate = useNavigate()
 
   const [step, setStep] = useState(1)
+  const [capturedImages, setCapturedImages] = useState([])
+  const [capturedImagesMap, setCapturedImagesMap] = useState({ front: null, left: null, right: null, back: null })
   const [userHeight, setUserHeight] = useState("")
   const [showHeightInput, setShowHeightInput] = useState(true)
   const [hasCachedHeight, setHasCachedHeight] = useState(false)
@@ -173,8 +236,8 @@ function BodyScan() {
   const [isCapturing, setIsCapturing] = useState(false)
   const [currentCaptureStep, setCurrentCaptureStep] = useState(0)
 
-  const { setMeasurements, setScanImages, setConfidenceScores, setWarnings, setScanClassification } = useApp()
-  const { loading, error: scanError, clearError } = useScanImage()
+  const { setMeasurements, setConfidenceScores, setWarnings, setScanClassification } = useApp()
+  const { scan, loading, error: scanError, clearError } = useScanImage()
 
   // Real-time MediaPipe pose detection
   const {
@@ -183,6 +246,7 @@ function BodyScan() {
     error: mediapipeError,
     startDetection,
     stopDetection,
+    clearLandmarks,
   } = useMediaPipe()
 
   // Use local error state for scan errors
@@ -194,14 +258,6 @@ function BodyScan() {
     "Turn to your right side",
     "Turn your back to the camera"
   ]
-
-  const stopCamera = useCallback(() => {
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach(track => track.stop())
-      streamRef.current = null
-    }
-    landmarksRef.current = null
-  }, [])
 
   // Load saved height from localStorage on mount (as suggestion, not source of truth)
   useEffect(() => {
@@ -266,7 +322,7 @@ function BodyScan() {
       landmarksRef.current = null
       stopDetection()
     }
-  }, [mediapipeLoaded, startDetection, stopDetection, showLandmarks])
+  }, [mediapipeLoaded, startDetection, stopDetection])
 
   useEffect(() => {
     async function startCamera() {
@@ -285,7 +341,7 @@ function BodyScan() {
 
         streamRef.current = stream
 
-      } catch {
+      } catch (error) {
         alert("Camera access denied")
       }
     }
@@ -296,7 +352,15 @@ function BodyScan() {
       stopCamera()
     }
 
-  }, [stopCamera])
+  }, [])
+
+  const stopCamera = () => {
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(track => track.stop())
+      streamRef.current = null
+    }
+    landmarksRef.current = null
+  }
 
   const captureFrame = useCallback(() => {
     if (!videoRef.current || !canvasRef.current) return null
@@ -329,6 +393,9 @@ function BodyScan() {
     })
   }, [])
 
+  const handleCapture = async () => {
+    await startAutoCapture()
+  }
   // Automated multi-capture function - captures 4 images with countdowns
   const startAutoCapture = async () => {
     if (isCapturing || countingDown || loading) return
@@ -414,6 +481,10 @@ function BodyScan() {
       const imageType = stepToImageType[i + 1]
       capturedImagesMapLocal[imageType] = imageData
       capturedImagesArray.push(imageData)
+
+      // Also update state for UI display
+      setCapturedImagesMap(prev => ({ ...prev, [imageType]: imageData }))
+      setCapturedImages(prev => [...prev, imageData])
 
       console.log(`Captured ${imageType} image`)
     }
@@ -509,16 +580,10 @@ function BodyScan() {
           scan_type: response?.scan_type || null,
         }))
       )
-      console.log("Scan response summary:", responses.map(summarizeScanResponse))
+      console.log("Full scan responses:", JSON.stringify(responses, null, 2))
 
       const visResponse = await scanMeasureMultiple(base64Images, heightParam)
-      console.log("Multi-image scan summary:", {
-        success: visResponse?.success,
-        scan_type: visResponse?.scan_type,
-        imageCount: visResponse?.images?.length || 0,
-        hasMeasurements: Boolean(visResponse?.measurements),
-        warnings: visResponse?.warnings || [],
-      })
+      console.log("Multi-image scan response:", JSON.stringify(visResponse, null, 2))
       if (visResponse && visResponse.images) {
         setMultiScanResults({ images: visResponse.images })
       }
@@ -686,12 +751,6 @@ function BodyScan() {
       }
 
       setMeasurements(finalMeasurements)
-      setScanImages({
-        front: imagesToSend.front,
-        left: imagesToSend.left,
-        right: imagesToSend.right,
-        back: imagesToSend.back,
-      })
       setMultiLoading(false)
 
       setTimeout(() => {

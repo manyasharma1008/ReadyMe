@@ -16,7 +16,7 @@ load_dotenv()
 JWT_SECRET = os.getenv("SUPABASE_JWT_SECRET") or os.getenv("SUPABASE_KEY", "")
 ALGORITHM = "HS256"
 
-security = HTTPBearer(auto_error=False)
+security = HTTPBearer()
 
 
 class TokenData:

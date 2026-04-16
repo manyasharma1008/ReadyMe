@@ -5,47 +5,10 @@
 
 import { createContext, useContext, useReducer, useCallback } from 'react'
 
-const MEASUREMENTS_STORAGE_KEY = 'readyme.measurements'
-const SCAN_IMAGES_STORAGE_KEY = 'readyme.scanImages'
-
-function getStoredJson(storageKey) {
-  if (typeof window === 'undefined') return null
-
-  try {
-    const stored = window.localStorage.getItem(storageKey)
-    return stored ? JSON.parse(stored) : null
-  } catch (error) {
-    console.warn(`Could not load stored value for ${storageKey}:`, error)
-    return null
-  }
-}
-
-function setStoredJson(storageKey, value) {
-  if (typeof window === 'undefined') return
-
-  try {
-    window.localStorage.setItem(storageKey, JSON.stringify(value))
-  } catch (error) {
-    console.warn(`Could not persist value for ${storageKey}:`, error)
-  }
-}
-
-function removeStoredJson(storageKey) {
-  if (typeof window === 'undefined') return
-
-  try {
-    window.localStorage.removeItem(storageKey)
-  } catch (error) {
-    console.warn(`Could not clear stored value for ${storageKey}:`, error)
-  }
-}
-
 // Initial state
 const initialState = {
   // Body measurements from scan
-  measurements: getStoredJson(MEASUREMENTS_STORAGE_KEY),
-  // Captured scan images used by image-based virtual try-on
-  scanImages: getStoredJson(SCAN_IMAGES_STORAGE_KEY),
+  measurements: null,
   // Size recommendations
   recommendations: null,
   // User preferences
@@ -68,13 +31,11 @@ const initialState = {
 // Action types
 const ActionTypes = {
   SET_MEASUREMENTS: 'SET_MEASUREMENTS',
-  SET_SCAN_IMAGES: 'SET_SCAN_IMAGES',
   SET_RECOMMENDATIONS: 'SET_RECOMMENDATIONS',
   SET_PREFERENCES: 'SET_PREFERENCES',
   SET_LOADING: 'SET_LOADING',
   SET_ERROR: 'SET_ERROR',
   CLEAR_MEASUREMENTS: 'CLEAR_MEASUREMENTS',
-  CLEAR_SCAN_IMAGES: 'CLEAR_SCAN_IMAGES',
   CLEAR_RECOMMENDATIONS: 'CLEAR_RECOMMENDATIONS',
   CLEAR_ERROR: 'CLEAR_ERROR',
   RESET_STATE: 'RESET_STATE',
@@ -92,12 +53,6 @@ function appReducer(state, action) {
         ...state,
         measurements: action.payload,
         error: null,
-      }
-
-    case ActionTypes.SET_SCAN_IMAGES:
-      return {
-        ...state,
-        scanImages: action.payload,
       }
 
     case ActionTypes.SET_RECOMMENDATIONS:
@@ -133,12 +88,6 @@ function appReducer(state, action) {
       return {
         ...state,
         measurements: null,
-      }
-
-    case ActionTypes.CLEAR_SCAN_IMAGES:
-      return {
-        ...state,
-        scanImages: null,
       }
 
     case ActionTypes.CLEAR_RECOMMENDATIONS:
@@ -203,13 +152,7 @@ export function AppProvider({ children }) {
 
   // Actions
   const setMeasurements = useCallback((measurements) => {
-    setStoredJson(MEASUREMENTS_STORAGE_KEY, measurements)
     dispatch({ type: ActionTypes.SET_MEASUREMENTS, payload: measurements })
-  }, [])
-
-  const setScanImages = useCallback((scanImages) => {
-    setStoredJson(SCAN_IMAGES_STORAGE_KEY, scanImages)
-    dispatch({ type: ActionTypes.SET_SCAN_IMAGES, payload: scanImages })
   }, [])
 
   const setRecommendations = useCallback((recommendations) => {
@@ -229,13 +172,7 @@ export function AppProvider({ children }) {
   }, [])
 
   const clearMeasurements = useCallback(() => {
-    removeStoredJson(MEASUREMENTS_STORAGE_KEY)
     dispatch({ type: ActionTypes.CLEAR_MEASUREMENTS })
-  }, [])
-
-  const clearScanImages = useCallback(() => {
-    removeStoredJson(SCAN_IMAGES_STORAGE_KEY)
-    dispatch({ type: ActionTypes.CLEAR_SCAN_IMAGES })
   }, [])
 
   const clearRecommendations = useCallback(() => {
@@ -247,8 +184,6 @@ export function AppProvider({ children }) {
   }, [])
 
   const resetState = useCallback(() => {
-    removeStoredJson(MEASUREMENTS_STORAGE_KEY)
-    removeStoredJson(SCAN_IMAGES_STORAGE_KEY)
     dispatch({ type: ActionTypes.RESET_STATE })
   }, [])
 
@@ -270,25 +205,21 @@ export function AppProvider({ children }) {
 
   // Computed values
   const hasMeasurements = state.measurements !== null
-  const hasScanImages = state.scanImages !== null
   const hasRecommendations = state.recommendations !== null
 
   const value = {
     // State
     ...state,
     hasMeasurements,
-    hasScanImages,
     hasRecommendations,
 
     // Actions
     setMeasurements,
-    setScanImages,
     setRecommendations,
     setPreferences,
     setLoading,
     setError,
     clearMeasurements,
-    clearScanImages,
     clearRecommendations,
     clearError,
     resetState,
@@ -316,11 +247,6 @@ export function useApp() {
 export function useMeasurements() {
   const { measurements, hasMeasurements, setMeasurements, clearMeasurements } = useApp()
   return { measurements, hasMeasurements, setMeasurements, clearMeasurements }
-}
-
-export function useScanImages() {
-  const { scanImages, hasScanImages, setScanImages, clearScanImages } = useApp()
-  return { scanImages, hasScanImages, setScanImages, clearScanImages }
 }
 
 export function useRecommendations() {
