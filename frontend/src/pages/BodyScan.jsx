@@ -8,6 +8,7 @@ import { scanMeasureEnhanced, scanMeasureMultiple } from "../api"
 import LoadingSpinner from "../components/common/LoadingSpinner"
 import ErrorMessage from "../components/common/ErrorMessage"
 import { FramingOverlay } from "../components/FramingOverlay"
+import ActiveProductPanel from "../components/ActiveProductPanel"
 
 // Validation utility
 const isValidHeight = (h) => {
@@ -238,7 +239,7 @@ function BodyScan() {
   const [isCapturing, setIsCapturing] = useState(false)
   const [currentCaptureStep, setCurrentCaptureStep] = useState(0)
 
-  const { setMeasurements, setConfidenceScores, setWarnings, setScanClassification } = useApp()
+  const { activeProduct, setMeasurements, setConfidenceScores, setWarnings, setScanClassification } = useApp()
   const { scan, loading, error: scanError, clearError } = useScanImage()
 
   // Real-time MediaPipe pose detection
@@ -802,6 +803,12 @@ function BodyScan() {
       <p className="mt-2 text-sm text-charcoal-700/70">
         {instructions[step - 1]}
       </p>
+
+      {activeProduct && (
+        <div className="mt-4 w-full max-w-2xl">
+          <ActiveProductPanel session={activeProduct} compact />
+        </div>
+      )}
 
       {/* Height Input for Calibration */}
       {showHeightInput && step === 1 && (

@@ -3,7 +3,14 @@
  * Global state management for ReadyMe application
  */
 
-import { createContext, useContext, useReducer, useCallback } from 'react'
+import { createContext, useContext, useReducer, useCallback, useEffect } from 'react'
+import {
+  clearPersistedActiveProductSession,
+  getInitialPreferencesFromProduct,
+  loadPersistedActiveProductSession,
+  normalizeActiveProductSession,
+  persistActiveProductSession,
+} from '../utils/activeProductSession'
 
 // Initial state
 const initialState = {
@@ -16,6 +23,7 @@ const initialState = {
     gender: 'men',
     category: 'shirts',
   },
+  activeProduct: null,
   // Scan history (for future use)
   scanHistory: [],
   // Loading states
@@ -33,10 +41,12 @@ const ActionTypes = {
   SET_MEASUREMENTS: 'SET_MEASUREMENTS',
   SET_RECOMMENDATIONS: 'SET_RECOMMENDATIONS',
   SET_PREFERENCES: 'SET_PREFERENCES',
+  SET_ACTIVE_PRODUCT: 'SET_ACTIVE_PRODUCT',
   SET_LOADING: 'SET_LOADING',
   SET_ERROR: 'SET_ERROR',
   CLEAR_MEASUREMENTS: 'CLEAR_MEASUREMENTS',
   CLEAR_RECOMMENDATIONS: 'CLEAR_RECOMMENDATIONS',
+  CLEAR_ACTIVE_PRODUCT: 'CLEAR_ACTIVE_PRODUCT',
   CLEAR_ERROR: 'CLEAR_ERROR',
   RESET_STATE: 'RESET_STATE',
   ADD_TO_HISTORY: 'ADD_TO_HISTORY',
@@ -71,6 +81,22 @@ function appReducer(state, action) {
         },
       }
 
+    case ActionTypes.SET_ACTIVE_PRODUCT: {
+      const activeProduct = action.payload
+      const seededPreferences = action.syncPreferences
+        ? getInitialPreferencesFromProduct(activeProduct)
+        : {}
+
+      return {
+        ...state,
+        activeProduct,
+        preferences: {
+          ...state.preferences,
+          ...seededPreferences,
+        },
+      }
+    }
+
     case ActionTypes.SET_LOADING:
       return {
         ...state,
@@ -96,6 +122,12 @@ function appReducer(state, action) {
         recommendations: null,
       }
 
+    case ActionTypes.CLEAR_ACTIVE_PRODUCT:
+      return {
+        ...state,
+        activeProduct: null,
+      }
+
     case ActionTypes.CLEAR_ERROR:
       return {
         ...state,
@@ -106,6 +138,7 @@ function appReducer(state, action) {
       return {
         ...initialState,
         preferences: state.preferences, // Preserve preferences
+        activeProduct: state.activeProduct,
       }
 
     case ActionTypes.ADD_TO_HISTORY:
@@ -150,6 +183,17 @@ const AppContext = createContext(null)
 export function AppProvider({ children }) {
   const [state, dispatch] = useReducer(appReducer, initialState)
 
+  useEffect(() => {
+    const persistedSession = loadPersistedActiveProductSession()
+    if (!persistedSession) return
+
+    dispatch({
+      type: ActionTypes.SET_ACTIVE_PRODUCT,
+      payload: persistedSession,
+      syncPreferences: true,
+    })
+  }, [])
+
   // Actions
   const setMeasurements = useCallback((measurements) => {
     dispatch({ type: ActionTypes.SET_MEASUREMENTS, payload: measurements })
@@ -161,6 +205,18 @@ export function AppProvider({ children }) {
 
   const setPreferences = useCallback((preferences) => {
     dispatch({ type: ActionTypes.SET_PREFERENCES, payload: preferences })
+  }, [])
+
+  const setActiveProduct = useCallback((session, options = {}) => {
+    const normalizedSession = normalizeActiveProductSession(session)
+    if (!normalizedSession) return
+
+    persistActiveProductSession(normalizedSession)
+    dispatch({
+      type: ActionTypes.SET_ACTIVE_PRODUCT,
+      payload: normalizedSession,
+      syncPreferences: options.syncPreferences !== false,
+    })
   }, [])
 
   const setLoading = useCallback((isLoading) => {
@@ -177,6 +233,11 @@ export function AppProvider({ children }) {
 
   const clearRecommendations = useCallback(() => {
     dispatch({ type: ActionTypes.CLEAR_RECOMMENDATIONS })
+  }, [])
+
+  const clearActiveProduct = useCallback(() => {
+    clearPersistedActiveProductSession()
+    dispatch({ type: ActionTypes.CLEAR_ACTIVE_PRODUCT })
   }, [])
 
   const clearError = useCallback(() => {
@@ -217,10 +278,12 @@ export function AppProvider({ children }) {
     setMeasurements,
     setRecommendations,
     setPreferences,
+    setActiveProduct,
     setLoading,
     setError,
     clearMeasurements,
     clearRecommendations,
+    clearActiveProduct,
     clearError,
     resetState,
     addToHistory,
@@ -257,6 +320,11 @@ export function useRecommendations() {
 export function usePreferences() {
   const { preferences, setPreferences } = useApp()
   return { preferences, setPreferences }
+}
+
+export function useActiveProduct() {
+  const { activeProduct, setActiveProduct, clearActiveProduct } = useApp()
+  return { activeProduct, setActiveProduct, clearActiveProduct }
 }
 
 export default AppContext

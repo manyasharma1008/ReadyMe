@@ -5,6 +5,8 @@ import { useSizePrediction } from "../hooks"
 import { saveProfile } from "../api"
 import LoadingSpinner from "../components/common/LoadingSpinner"
 import ErrorMessage from "../components/common/ErrorMessage"
+import ActiveProductPanel from "../components/ActiveProductPanel"
+import { getBackendSizeChart } from "../utils/activeProductSession"
 
 function SizeResult() {
 
@@ -14,6 +16,7 @@ function SizeResult() {
     setMeasurements,
     preferences,
     setPreferences,
+    activeProduct,
     clearMeasurements,
     confidenceScores,
     warnings,
@@ -41,6 +44,24 @@ function SizeResult() {
   // Check if navigated from manual entry
   const location = useLocation()
   const isManualMode = location.state?.manual || manualInput
+  const productSizeChart = getBackendSizeChart(activeProduct)
+
+  const buildPredictionOptions = () => {
+    if (productSizeChart) {
+      return {
+        sizeChart: productSizeChart,
+        useStandardChart: false,
+        category: preferences.category || activeProduct?.product?.category || 'shirts',
+        gender: preferences.gender || activeProduct?.product?.gender || 'men',
+      }
+    }
+
+    return {
+      category: preferences.category || 'shirts',
+      gender: preferences.gender || 'men',
+      useStandardChart: true,
+    }
+  }
 
   // Predict size when measurements are available (skip in manual mode)
   useEffect(() => {
@@ -58,15 +79,12 @@ function SizeResult() {
 
       if (hasValidMeasurements) {
         console.log("Calling predict with:", measurements)
-        predict(measurements, {
-          category: preferences.category || 'shirts',
-          gender: preferences.gender || 'men',
-        })
+        predict(measurements, buildPredictionOptions())
       } else {
         console.warn("Invalid measurements - not calling predict:", measurements)
       }
     }
-  }, [measurements, recommendations, predict, preferences, isManualMode])
+  }, [measurements, recommendations, predict, preferences, isManualMode, activeProduct])
 
   // Clear stale recommendations once when entering manual mode (not on every recommendation change)
   useEffect(() => {
@@ -126,20 +144,14 @@ function SizeResult() {
     // Write to context to establish single source of truth
     setMeasurements(numericMeasurements)
 
-    await predict(numericMeasurements, {
-      category: preferences.category,
-      gender: preferences.gender,
-    })
+    await predict(numericMeasurements, buildPredictionOptions())
   }
 
   // Retry prediction
   const handleRetry = () => {
     clearError()
     if (measurements) {
-      predict(measurements, {
-        category: preferences.category,
-        gender: preferences.gender,
-      })
+      predict(measurements, buildPredictionOptions())
     }
   }
 
@@ -156,6 +168,7 @@ function SizeResult() {
 
     if (measurements && !isManualMode) {
       await predict(measurements, {
+        ...buildPredictionOptions(),
         category: nextPreferences.category,
         gender: nextPreferences.gender,
       })
@@ -230,6 +243,11 @@ function SizeResult() {
 
         <div className="bg-white rounded-lg shadow-lg p-6 mb-6">
           <h3 className="text-lg font-medium mb-4">Recommendation Settings</h3>
+          {activeProduct && (
+            <div className="mb-4">
+              <ActiveProductPanel session={activeProduct} compact />
+            </div>
+          )}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
               <label className="block text-sm text-gray-600 mb-1">Gender</label>
@@ -258,6 +276,11 @@ function SizeResult() {
               </select>
             </div>
           </div>
+          {productSizeChart && (
+            <p className="mt-4 text-sm text-green-700">
+              Using the extracted product size chart for this item. Category and gender stay visible as editable defaults for non-product predictions.
+            </p>
+          )}
         </div>
 
         {/* Scan Classification Banner */}

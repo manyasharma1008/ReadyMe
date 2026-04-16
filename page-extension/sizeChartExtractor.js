@@ -50,6 +50,127 @@
     '[data-test*="size"]',
   ];
   const SIZE_LABEL_PATTERN = /^(xxxs|xxs|xs|s|m|l|xl|xxl|xxxl|4xl|5xl|\d{1,3}|[a-z]{1,4}\/[a-z]{1,4})$/i;
+  const SITE_PROFILES = [
+    {
+      id: "amazon",
+      hostPattern: /(^|\.)amazon\./i,
+      productUrlPatterns: [/\/dp\/[A-Z0-9]{8,}/i, /\/gp\/product\/[A-Z0-9]{8,}/i],
+      productIdPatterns: [/\/dp\/([A-Z0-9]{8,})/i, /\/gp\/product\/([A-Z0-9]{8,})/i],
+      productRootSelectors: ["#dp-container", "#ppd", "#dp", "#centerCol"],
+      titleSelectors: ["#productTitle", "#title span", "#title"],
+      brandSelectors: ["#bylineInfo", "#brand"],
+      priceSelectors: [
+        "#corePriceDisplay_desktop_feature_div .a-offscreen",
+        "#corePrice_feature_div .a-offscreen",
+        ".a-price .a-offscreen",
+      ],
+      imageSelectors: ["#landingImage", "#imgTagWrapperId img", "#main-image-container img"],
+      galleryImageSelectors: ["#altImages img", "#imageBlockThumbs img", "#ivThumbs img"],
+      sizeTriggerSelectors: [
+        "#inline-twister-expander-header-size_name",
+        "[id*='sizechart']",
+        "[aria-label*='size chart']",
+      ],
+      chartContainerSelectors: [
+        "#inline-twister-expander-content-size_name",
+        "[id*='size-chart']",
+        "[class*='size-chart']",
+      ],
+    },
+    {
+      id: "myntra",
+      hostPattern: /(^|\.)myntra\.com$/i,
+      productUrlPatterns: [/\/buy/i, /\/[a-z0-9-]+\/[a-z0-9-]+\/\d+\/buy/i],
+      productIdPatterns: [/\/(\d+)\/buy/i],
+      productRootSelectors: [
+        "[class*='pdp-page']",
+        "[class*='index-pdpContainer']",
+        "[class*='pdp-details']",
+      ],
+      titleSelectors: [
+        "h1[class*='pdp-name']",
+        "h1[class*='product-name']",
+        "[class*='pdp-productDescriptorsContainer'] h1:last-child",
+      ],
+      brandSelectors: [
+        "h1[class*='pdp-title']",
+        "[class*='pdp-productDescriptorsContainer'] h1:first-child",
+      ],
+      priceSelectors: [
+        "span[class*='pdp-price'] strong",
+        "[class*='pdp-price']",
+        "[class*='price'] strong",
+      ],
+      imageSelectors: ["img[class*='image-grid-image']", "picture img", "img[class*='img-responsive']"],
+      galleryImageSelectors: ["div[class*='image-grid'] img", "div[class*='thumbnails'] img"],
+      sizeTriggerSelectors: [
+        "[class*='sizeButtonsContainer'] button",
+        "[class*='size-chart']",
+        "[class*='sizeButton']",
+      ],
+      chartContainerSelectors: [
+        "[class*='size-chart']",
+        "[class*='sizeChart']",
+        "[class*='sizeButtonsContainer']",
+      ],
+    },
+    {
+      id: "ajio",
+      hostPattern: /(^|\.)ajio\.com$/i,
+      productUrlPatterns: [/\/p\//i],
+      productIdPatterns: [/\/p\/([^/?#]+)/i],
+      productRootSelectors: [
+        "[class*='prod-description']",
+        "[class*='product-details']",
+        "[class*='prod-container']",
+      ],
+      titleSelectors: ["h1[class*='prod-name']", "h1[class*='product-title']", "h1"],
+      brandSelectors: ["div[class*='brand']", "span[class*='brand']"],
+      priceSelectors: [
+        "div[class*='prod-sp']",
+        "span[class*='price']",
+        "div[class*='price'] strong",
+      ],
+      imageSelectors: ["img[class*='rilrtl-lazy-img']", "picture img", "img[class*='prod-image']"],
+      galleryImageSelectors: ["div[class*='prod-images'] img", "div[class*='thumbnail'] img"],
+      sizeTriggerSelectors: [
+        "[class*='size-chart']",
+        "button[class*='size']",
+        "div[class*='size'] button",
+      ],
+      chartContainerSelectors: [
+        "[class*='size-chart']",
+        "[class*='sizeChart']",
+        "[class*='size-guide']",
+      ],
+    },
+    {
+      id: "meesho",
+      hostPattern: /(^|\.)meesho\.com$/i,
+      productUrlPatterns: [/\/p\//i],
+      productIdPatterns: [/\/p\/([^/?#]+)/i],
+      productRootSelectors: [
+        "[class*='ProductPage']",
+        "[class*='pdp']",
+        "[class*='ProductDetails']",
+      ],
+      titleSelectors: ["h1[class*='Product']", "h1[class*='title']", "h1"],
+      brandSelectors: ["div[class*='brand']", "span[class*='brand']"],
+      priceSelectors: ["h4[class*='price']", "span[class*='price']", "div[class*='price']"],
+      imageSelectors: ["img[class*='ProductImage']", "picture img", "img[class*='image']"],
+      galleryImageSelectors: ["div[class*='ImageCarousel'] img", "div[class*='thumbnail'] img"],
+      sizeTriggerSelectors: [
+        "[class*='size-chart']",
+        "button[class*='size']",
+        "div[class*='size']",
+      ],
+      chartContainerSelectors: [
+        "[class*='size-chart']",
+        "[class*='sizeChart']",
+        "[class*='size-guide']",
+      ],
+    },
+  ];
   const MEASUREMENT_ALIASES = {
     chest: "chest",
     bust: "chest",
@@ -74,6 +195,15 @@
     return cleanText(value).toLowerCase();
   }
 
+  function getCurrentSiteProfile() {
+    const hostname = window.location.hostname.toLowerCase();
+    return SITE_PROFILES.find((profile) => profile.hostPattern.test(hostname)) || null;
+  }
+
+  function mergeSelectors(profileSelectors = [], genericSelectors = []) {
+    return Array.from(new Set([...(profileSelectors || []), ...(genericSelectors || [])]));
+  }
+
   function wait(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
@@ -90,6 +220,12 @@
   }
 
   function getProductRoot() {
+    const siteProfile = getCurrentSiteProfile();
+    for (const selector of mergeSelectors(siteProfile?.productRootSelectors, [])) {
+      const element = document.querySelector(selector);
+      if (element && isVisible(element)) return element;
+    }
+
     for (const selector of PRODUCT_ROOT_SELECTORS) {
       const element = document.querySelector(selector);
       if (element && isVisible(element)) return element;
@@ -102,6 +238,12 @@
   }
 
   function detectProductId(url) {
+    const siteProfile = getCurrentSiteProfile();
+    for (const pattern of siteProfile?.productIdPatterns || []) {
+      const match = url.match(pattern);
+      if (match) return match[1];
+    }
+
     const patterns = [
       /\/dp\/([A-Z0-9]{8,})/i,
       /\/gp\/product\/([A-Z0-9]{8,})/i,
@@ -189,6 +331,31 @@
     if (!matches || matches.length === 0) return null;
 
     return Number(matches[0]);
+  }
+
+  function queryText(selectors = [], root = document) {
+    for (const selector of selectors) {
+      const element = root.querySelector(selector);
+      const text = cleanText(element?.innerText || element?.textContent || "");
+      if (text) return text;
+    }
+    return "";
+  }
+
+  function queryElements(selectors = [], root = document) {
+    const elements = [];
+    for (const selector of selectors) {
+      elements.push(...Array.from(root.querySelectorAll(selector)));
+    }
+    return elements;
+  }
+
+  function isLikelyImageUrl(url) {
+    const normalized = String(url || "").toLowerCase();
+    return (
+      /\.(jpg|jpeg|png|webp|gif|avif)(?:$|\?)/.test(normalized) ||
+      /(image|images|img|photo|media|cdn)/.test(normalized)
+    );
   }
 
   function parseMatrixRows(matrix, sourceType, sourceSelector) {
@@ -396,8 +563,9 @@
   }
 
   function findChartContainers() {
+    const siteProfile = getCurrentSiteProfile();
     const candidates = [];
-    for (const selector of CHART_CONTAINER_SELECTORS) {
+    for (const selector of mergeSelectors(siteProfile?.chartContainerSelectors, CHART_CONTAINER_SELECTORS)) {
       const elements = getProductRoot().querySelectorAll(selector);
       for (const element of elements) {
         if (candidates.length >= 30) break;
@@ -412,7 +580,83 @@
     return candidates;
   }
 
+  function collectProductImages(root) {
+    const siteProfile = getCurrentSiteProfile();
+    const images = new Set();
+
+    // OpenGraph
+    const og = document.querySelector("meta[property='og:image']")?.content;
+    if (og) images.add(new URL(og, location.href).href);
+
+    // link rel image_src
+    const linkImg = document.querySelector('link[rel="image_src"]')?.href;
+    if (linkImg) images.add(new URL(linkImg, location.href).href);
+
+    // Structured data (ld+json)
+    const ldNodes = Array.from(document.querySelectorAll('script[type="application/ld+json"]'));
+    for (const node of ldNodes) {
+      try {
+        const json = JSON.parse(node.textContent || "null");
+
+        (function extract(v) {
+          if (!v) return;
+          if (typeof v === "string") {
+            if (v.startsWith("http") && isLikelyImageUrl(v)) images.add(new URL(v, location.href).href);
+            return;
+          }
+          if (Array.isArray(v)) return v.forEach(extract);
+          if (typeof v === "object") {
+            if (v.image) extract(v.image);
+            if (v.url && isLikelyImageUrl(v.url)) images.add(new URL(v.url, location.href).href);
+            Object.values(v).forEach(extract);
+          }
+        })(json);
+      } catch (e) {
+        // ignore invalid JSON
+      }
+    }
+
+    for (const element of queryElements(mergeSelectors(siteProfile?.imageSelectors, siteProfile?.galleryImageSelectors), root || document)) {
+      const src =
+        element.currentSrc ||
+        element.src ||
+        element.getAttribute("data-src") ||
+        element.getAttribute("data-lazy-src");
+      if (!src) continue;
+      images.add(new URL(src, location.href).href);
+    }
+
+    // Images from product root (prefer larger images)
+    const imgEls = Array.from((root || document).querySelectorAll("img"));
+    const candidates = imgEls
+      .map((img) => {
+        const src = img.currentSrc || img.src || img.getAttribute("data-src") || img.getAttribute("data-lazy-src");
+        if (!src) return null;
+        const abs = new URL(src, location.href).href;
+        const area = (img.naturalWidth || img.width || 0) * (img.naturalHeight || img.height || 0);
+        return { src: abs, area };
+      })
+      .filter(Boolean)
+      .sort((a, b) => b.area - a.area);
+
+    for (const c of candidates.slice(0, 12)) images.add(c.src);
+
+    return Array.from(images).slice(0, 12);
+  }
+
   async function openSizeChartIfNeeded() {
+    const siteProfile = getCurrentSiteProfile();
+    const siteSpecificTriggers = queryElements(siteProfile?.sizeTriggerSelectors || [], getSearchRoot()).slice(0, 8);
+
+    for (const trigger of siteSpecificTriggers) {
+      const clickable = trigger.closest("button, a, [role='button'], summary, [onclick]") || trigger;
+      if (!isVisible(clickable)) continue;
+      clickable.click();
+      await wait(500);
+      const containers = findChartContainers();
+      if (containers.length > 0) return true;
+    }
+
     const triggers = Array.from(getSearchRoot().querySelectorAll(SIZE_TRIGGER_SELECTORS.join(",")))
       .filter(isTriggerCandidate)
       .slice(0, 8);
@@ -447,16 +691,28 @@
   }
 
   function extractProductContext() {
+    const siteProfile = getCurrentSiteProfile();
     const root = getProductRoot();
+    const siteBrand = queryText(siteProfile?.brandSelectors || [], root);
+    const siteTitle = queryText(siteProfile?.titleSelectors || [], root);
     const title =
+      siteTitle ||
       cleanText(document.querySelector("meta[property='og:title']")?.content) ||
       cleanText(root.querySelector("h1")?.innerText) ||
       cleanText(document.title);
-    const image =
+    const siteImage = queryElements(siteProfile?.imageSelectors || [], root)[0];
+    const initialImage =
+      siteImage?.currentSrc ||
+      siteImage?.src ||
       document.querySelector("meta[property='og:image']")?.content ||
+      document.querySelector("link[rel='image_src']")?.href ||
       root.querySelector("img")?.src ||
       "";
+
+    const images = collectProductImages(root);
+    const image = initialImage ? new URL(initialImage, location.href).href : (images[0] || "");
     const price =
+      queryText(siteProfile?.priceSelectors || [], root) ||
       cleanText(document.querySelector("meta[property='product:price:amount']")?.content) ||
       cleanText(root.querySelector("[class*='price'], [data-testid*='price']")?.innerText);
     const pageText = getPageTextSample();
@@ -465,23 +721,26 @@
       url: window.location.href,
       title,
       image,
+      images,
       price,
       product_id: detectProductId(window.location.href),
-      brand: cleanText(root.querySelector('[data-brand], [class*="brand"]')?.innerText) || null,
+      brand: siteBrand || cleanText(root.querySelector('[data-brand], [class*="brand"]')?.innerText) || null,
       category: detectCategory(`${window.location.href.toLowerCase()} ${pageText}`),
       gender: detectGender(`${window.location.href.toLowerCase()} ${pageText}`),
-      site_name: window.location.hostname,
+      site_name: window.location.hostname.replace(/^www\./i, ""),
     };
   }
 
   function isLikelyProductPage(product) {
     const pageText = getPageTextSample();
+    const siteProfile = getCurrentSiteProfile();
     const positiveSignals = [
       Boolean(product.title),
       Boolean(product.image),
       Boolean(product.price),
       PRODUCT_HINTS.some((hint) => pageText.includes(hint)),
       /\/(dp|gp\/product|product|products|p)\//i.test(window.location.pathname),
+      siteProfile?.productUrlPatterns?.some((pattern) => pattern.test(window.location.href)),
     ].filter(Boolean).length;
 
     return positiveSignals >= 2;

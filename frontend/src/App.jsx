@@ -1,6 +1,7 @@
 import { BrowserRouter as Router, Routes, Route } from "react-router-dom"
 
 import { AppProvider } from "./context/AppContext"
+import AppSessionBootstrap from "./components/AppSessionBootstrap"
 
 import Home from "./pages/Home"
 import Contact from "./pages/Contact"
@@ -16,6 +17,7 @@ function App() {
   return (
     <AppProvider>
       <Router>
+        <AppSessionBootstrap />
         <Routes>
 
         {/* Landing Page */}

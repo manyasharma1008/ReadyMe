@@ -17,7 +17,39 @@
     <!-- Main Card -->
     <div class="card">
 
-      <p class="label">Scan current outfit</p>
+      <p class="label">Active shopping page</p>
+
+      <div class="status-row">
+        <span class="field-label">Status</span>
+        <span id="popup-status-badge" class="status-pill" data-status="loading">Loading</span>
+      </div>
+
+      <div class="info-grid">
+        <div class="info-item">
+          <span class="field-label">Product</span>
+          <span id="popup-product-value" class="field-value">Reading current tab…</span>
+        </div>
+        <div class="info-item">
+          <span class="field-label">Site</span>
+          <span id="popup-site-value" class="field-value">—</span>
+        </div>
+        <div class="info-item">
+          <span class="field-label">Category</span>
+          <span id="popup-category-value" class="field-value">—</span>
+        </div>
+        <div class="info-item">
+          <span class="field-label">Sizes</span>
+          <span id="popup-size-value" class="field-value">0</span>
+        </div>
+        <div class="info-item">
+          <span class="field-label">Backend</span>
+          <span id="popup-backend-value" class="field-value">Checking…</span>
+        </div>
+        <div class="info-item">
+          <span class="field-label">Warnings</span>
+          <span id="popup-warning-value" class="field-value">—</span>
+        </div>
+      </div>
 
       <button id="scan" class="cta-btn">
         <span>SCAN FIT</span>

@@ -1,6 +1,8 @@
 import { Canvas } from "@react-three/fiber"
 import { OrbitControls, useGLTF, Center } from "@react-three/drei"
 import { Suspense, useEffect, useState } from "react"
+import { useApp } from "../context/AppContext"
+import ActiveProductPanel from "./ActiveProductPanel"
 
 function Avatar() {
   const { scene } = useGLTF("/models/man.glb")
@@ -13,24 +15,16 @@ function Avatar() {
 }
 
 export default function PreviewRoom() {
+  const [selectedImage, setSelectedImage] = useState(null)
+  const { activeProduct } = useApp()
 
-  const [product, setProduct] = useState(null)
-
-  // Read data from extension
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search)
-    const data = params.get("data")
-
-    if (data) {
-      try {
-        const parsed = JSON.parse(decodeURIComponent(data))
-        console.log("PRODUCT:", parsed)
-        setProduct(parsed)
-      } catch (err) {
-        console.error("Invalid product data")
-      }
-    }
-  }, [])
+    const nextImage =
+      activeProduct?.product?.image ||
+      activeProduct?.product?.images?.[0] ||
+      null
+    setSelectedImage(nextImage)
+  }, [activeProduct])
 
   return (
     <div style={{ display: "flex", height: "100vh", background: "#e7e3dd" }}>
@@ -65,47 +59,22 @@ export default function PreviewRoom() {
       </div>
 
       {/* RIGHT PANEL */}
-      <div style={{ width: "220px", padding: "20px" }}>
+      <div style={{ width: "320px", padding: "20px", overflowY: "auto" }}>
         <h3>Select Outfit</h3>
 
-        {product ? (
-          <div style={{
-            padding: "10px",
-            border: "1px solid #ccc",
-            borderRadius: "6px",
-            background: "#fff",
-            marginBottom: "10px"
-          }}>
-            <div style={{ fontSize: "12px", opacity: 0.6 }}>
-              Detected Item
-            </div>
+        <ActiveProductPanel
+          session={activeProduct}
+          showGallery
+          selectedImage={selectedImage}
+          onSelectImage={setSelectedImage}
+        />
 
-            <div style={{ fontWeight: "500" }}>
-              {product.title || "Product"}
-            </div>
-
-            {product.image && (
-              <img
-                src={product.image}
-                alt=""
-                style={{
-                  width: "100%",
-                  marginTop: "8px",
-                  borderRadius: "4px"
-                }}
-              />
-            )}
-          </div>
-        ) : (
-          <div style={{ fontSize: "12px", opacity: 0.5 }}>
-            No product detected
-          </div>
-        )}
-
-        <div>Jacket</div>
-        <div>Hoodie</div>
-        <div>Shirt</div>
-        <div>Dress</div>
+        <div style={{ marginTop: "16px", display: "grid", gap: "8px", fontSize: "14px" }}>
+          <div>Jacket</div>
+          <div>Hoodie</div>
+          <div>Shirt</div>
+          <div>Dress</div>
+        </div>
 
       </div>
 
