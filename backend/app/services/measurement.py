@@ -1483,6 +1483,195 @@ def find_chest_y_ratio(landmarks: list, pixel_height: float,
         return CHEST_LINE_RATIO
 
 
+def fuse_multiview_circumference(views: dict, user_height_cm: float = DEFAULT_USER_HEIGHT_CM) -> dict:
+    """
+    Fuse multiview measurements using ellipse geometry.
+
+    - 4 views: width from front/back + depth from left/right -> full ellipse
+    - 2 views (front+back only): width known, depth estimated as 0.70 * width
+    - 1 view: fallback to factor-based calculation with reduced confidence
+
+    Args:
+        views: Dict mapping view name to {'landmarks', 'image_shape', 'pixel_height'}
+        user_height_cm: User's height in cm
+
+    Returns:
+        Dict with measurements (chest, waist, hips) and confidence score
+    """
+    result = {
+        'chest': 0.0,
+        'waist': 0.0,
+        'hips': 0.0,
+        'confidence': 0.0
+    }
+
+    if not views:
+        return result
+
+    # Classify each view
+    classified = {}
+    for view_name, view_data in views.items():
+        landmarks = view_data.get('landmarks', [])
+        view_type = classify_view(landmarks)
+        if view_type != "unknown":
+            classified[view_type] = view_data
+
+    # Determine available view pairs
+    has_front = 'front' in classified
+    has_back = 'back' in classified
+    has_left = 'left' in classified
+    has_right = 'right' in classified
+
+    front_back_count = sum([has_front, has_back])
+    left_right_count = sum([has_left, has_right])
+
+    # Get pixel_height from first available view for y-ratio calculations
+    first_view = next(iter(classified.values()))
+    pixel_height = first_view.get('pixel_height', 700)
+    image_shape = first_view.get('image_shape', (800, 800, 3))
+
+    # Find anatomical y-ratios from front view (prefer front, fall back to back)
+    front_view_data = classified.get('front', classified.get('back'))
+    if front_view_data:
+        front_landmarks = front_view_data['landmarks']
+        waist_y_ratio = find_waist_y_ratio(front_landmarks, pixel_height, user_height_cm)
+        hip_y_ratio = find_hip_y_ratio(front_landmarks, pixel_height, user_height_cm)
+        chest_y_ratio = find_chest_y_ratio(front_landmarks, pixel_height, waist_y_ratio, user_height_cm)
+    else:
+        # Fallback to defaults if no front/back view
+        waist_y_ratio = WAIST_LINE_RATIO
+        hip_y_ratio = 0.75
+        chest_y_ratio = CHEST_LINE_RATIO
+
+    # Collect widths from front/back views
+    widths = {
+        'chest': [],
+        'waist': [],
+        'hips': []
+    }
+
+    for view_type in ['front', 'back']:
+        if view_type in classified:
+            view_data = classified[view_type]
+            landmarks = view_data['landmarks']
+            ph = view_data.get('pixel_height', pixel_height)
+            ishape = view_data.get('image_shape', image_shape)
+
+            # Chest width
+            w = measure_width_cm_at_y(landmarks, ishape, ph, user_height_cm, chest_y_ratio)
+            if w > 0:
+                widths['chest'].append(w)
+
+            # Waist width
+            w = measure_width_cm_at_y(landmarks, ishape, ph, user_height_cm, waist_y_ratio)
+            if w > 0:
+                widths['waist'].append(w)
+
+            # Hip width
+            w = measure_width_cm_at_y(landmarks, ishape, ph, user_height_cm, hip_y_ratio)
+            if w > 0:
+                widths['hips'].append(w)
+
+    # Collect depths from left/right views
+    depths = {
+        'chest': [],
+        'waist': [],
+        'hips': []
+    }
+
+    for view_type in ['left', 'right']:
+        if view_type in classified:
+            view_data = classified[view_type]
+            landmarks = view_data['landmarks']
+            ph = view_data.get('pixel_height', pixel_height)
+            ishape = view_data.get('image_shape', image_shape)
+
+            # Chest depth
+            d = measure_depth_cm_at_y(landmarks, ishape, ph, user_height_cm, chest_y_ratio)
+            if d > 0:
+                depths['chest'].append(d)
+
+            # Waist depth
+            d = measure_depth_cm_at_y(landmarks, ishape, ph, user_height_cm, waist_y_ratio)
+            if d > 0:
+                depths['waist'].append(d)
+
+            # Hip depth
+            d = measure_depth_cm_at_y(landmarks, ishape, ph, user_height_cm, hip_y_ratio)
+            if d > 0:
+                depths['hips'].append(d)
+
+    # Calculate confidences and measurements
+    def robust_median(values: list) -> float:
+        if not values:
+            return 0.0
+        sorted_vals = sorted(values)
+        return sorted_vals[len(sorted_vals) // 2]
+
+    def calc_measurement(width_vals: list, depth_vals: list) -> tuple[float, float]:
+        """Returns (measurement_cm, confidence)"""
+        w = robust_median(width_vals) if width_vals else 0.0
+
+        if depth_vals:
+            # Full ellipse with measured depth
+            d = robust_median(depth_vals)
+            measurement = ramanujan_ellipse_perimeter(w, d)
+            # Confidence: high when we have both width and depth
+            conf = 0.95 if (width_vals and depth_vals) else 0.85
+            return measurement, conf
+        elif w > 0 and front_back_count >= 2:
+            # Estimate depth as 0.70 * width (typical torso ratio)
+            d = w * 0.70
+            measurement = ramanujan_ellipse_perimeter(w, d)
+            return measurement, 0.70
+        elif w > 0:
+            # Single view fallback - use factor-based calculation
+            measurement = w * FALLBACK_WAIST_CIRCUMFERENCE_FACTOR
+            return measurement, 0.50
+        return 0.0, 0.0
+
+    # Calculate each measurement
+    for key in ['chest', 'waist', 'hips']:
+        measurement, base_conf = calc_measurement(widths[key], depths[key])
+        result[key] = measurement
+
+    # Calculate overall confidence based on view count and agreement
+    view_count = len(classified)
+
+    if view_count >= 4:
+        base_confidence = 0.95
+    elif view_count == 3:
+        base_confidence = 0.90
+    elif view_count == 2:
+        base_confidence = 0.85
+    else:
+        base_confidence = 0.65
+
+    # Check front/back agreement
+    width_agreement = 1.0
+    if len(widths['waist']) >= 2:
+        w_vals = widths['waist']
+        median_w = robust_median(w_vals)
+        if median_w > 0:
+            max_dev = max(abs(w - median_w) / median_w for w in w_vals)
+            if max_dev > 0.10:
+                width_agreement = 0.80
+
+    # Check left/right agreement
+    depth_agreement = 1.0
+    if len(depths['waist']) >= 2:
+        d_vals = depths['waist']
+        median_d = robust_median(d_vals)
+        if median_d > 0:
+            max_dev = max(abs(d - median_d) / median_d for d in d_vals)
+            if max_dev > 0.10:
+                depth_agreement = 0.80
+
+    result['confidence'] = round(base_confidence * width_agreement * depth_agreement, 2)
+
+    return result
+
+
 def fuse_measurements(measurements_by_angle: dict) -> tuple[dict, dict]:
     """
     STEP 7: Multi-angle fusion.
@@ -1837,7 +2026,15 @@ def calculate_measurements_enhanced(landmarks_data: dict, image_shape: tuple,
             'confidence': empty_confidence,
             'warnings': ['Could not detect body in image'],
             'missing_landmarks': ['insufficient_landmarks'],
-            'can_calibrate': False
+            'can_calibrate': False,
+            'debug': {
+                'detected_landmark_count': 0,
+                'required_keypoint_visibilities': {},
+                'classified_view': 'unknown',
+                'front_back_width_px': None,
+                'side_depth_px': None,
+                'measurement_sources': {},
+            }
         }
 
     landmarks = landmarks_data['landmarks']
@@ -1850,7 +2047,15 @@ def calculate_measurements_enhanced(landmarks_data: dict, image_shape: tuple,
             'confidence': empty_confidence,
             'warnings': ['Could not detect body in image. Please ensure the image shows a full body clearly.'],
             'missing_landmarks': ['insufficient_landmarks'],
-            'can_calibrate': False
+            'can_calibrate': False,
+            'debug': {
+                'detected_landmark_count': 0,
+                'required_keypoint_visibilities': {},
+                'classified_view': 'unknown',
+                'front_back_width_px': None,
+                'side_depth_px': None,
+                'measurement_sources': {},
+            }
         }
 
     # Check framing
@@ -1871,7 +2076,15 @@ def calculate_measurements_enhanced(landmarks_data: dict, image_shape: tuple,
             'confidence': empty_confidence,
             'warnings': warnings + ['Full body not detected. Please step back and show entire body.'],
             'missing_landmarks': missing_landmarks,
-            'can_calibrate': False
+            'can_calibrate': False,
+            'debug': {
+                'detected_landmark_count': sum(1 for lm in landmarks if lm.get('visibility', 0) > LANDMARK_CONFIDENCE_THRESHOLD),
+                'required_keypoint_visibilities': {name: landmarks[idx].get('visibility', 0.0) for idx, name in {11: 'left_shoulder', 12: 'right_shoulder', 23: 'left_hip', 24: 'right_hip'}.items() if idx < len(landmarks)},
+                'classified_view': classify_view(landmarks),
+                'front_back_width_px': None,
+                'side_depth_px': None,
+                'measurement_sources': {},
+            }
         }
 
     # Check calibration prerequisites
@@ -1924,6 +2137,14 @@ def calculate_measurements_enhanced(landmarks_data: dict, image_shape: tuple,
                 'can_calibrate': False,
                 'fill_ratio': fill_ratio,
                 'framing': classify_framing(fill_info),
+                'debug': {
+                    'detected_landmark_count': sum(1 for lm in landmarks if lm.get('visibility', 0) > LANDMARK_CONFIDENCE_THRESHOLD),
+                    'required_keypoint_visibilities': {name: landmarks[idx].get('visibility', 0.0) for idx, name in {11: 'left_shoulder', 12: 'right_shoulder', 23: 'left_hip', 24: 'right_hip'}.items() if idx < len(landmarks)},
+                    'classified_view': classify_view(landmarks),
+                    'front_back_width_px': None,
+                    'side_depth_px': None,
+                    'measurement_sources': {},
+                }
             }
 
         # Validate pixel_height: subject must fill at least MIN_PIXEL_HEIGHT_RATIO of the image
@@ -1941,6 +2162,14 @@ def calculate_measurements_enhanced(landmarks_data: dict, image_shape: tuple,
                 'can_calibrate': False,
                 'fill_ratio': fill_ratio,
                 'framing': classify_framing(fill_info),
+                'debug': {
+                    'detected_landmark_count': sum(1 for lm in landmarks if lm.get('visibility', 0) > LANDMARK_CONFIDENCE_THRESHOLD),
+                    'required_keypoint_visibilities': {name: landmarks[idx].get('visibility', 0.0) for idx, name in {11: 'left_shoulder', 12: 'right_shoulder', 23: 'left_hip', 24: 'right_hip'}.items() if idx < len(landmarks)},
+                    'classified_view': classify_view(landmarks),
+                    'front_back_width_px': None,
+                    'side_depth_px': None,
+                    'measurement_sources': {},
+                }
             }
 
         # Determine if we're using full body or torso fallback
@@ -1960,6 +2189,14 @@ def calculate_measurements_enhanced(landmarks_data: dict, image_shape: tuple,
                 'can_calibrate': False,
                 'fill_ratio': fill_ratio,
                 'framing': classify_framing(fill_info),
+                'debug': {
+                    'detected_landmark_count': sum(1 for lm in landmarks if lm.get('visibility', 0) > LANDMARK_CONFIDENCE_THRESHOLD),
+                    'required_keypoint_visibilities': {name: landmarks[idx].get('visibility', 0.0) for idx, name in {11: 'left_shoulder', 12: 'right_shoulder', 23: 'left_hip', 24: 'right_hip'}.items() if idx < len(landmarks)},
+                    'classified_view': classify_view(landmarks),
+                    'front_back_width_px': None,
+                    'side_depth_px': None,
+                    'measurement_sources': {},
+                }
             }
 
         shoulders_valid, shoulder_reason = validate_shoulders(landmarks, image_shape)
@@ -2145,6 +2382,14 @@ def calculate_measurements_enhanced(landmarks_data: dict, image_shape: tuple,
             if measurements.get(key, 0) > 0 and confidence.get(key, 0) >= MEASUREMENT_CONFIDENCE_THRESHOLD
         ]
     elif len(reliable_measurements) < 2:
+        # Compute additional debug fields for per-view analysis (even for failure)
+        detected_landmark_count = sum(1 for lm in landmarks if lm.get('visibility', 0) > LANDMARK_CONFIDENCE_THRESHOLD)
+        required_keypoint_visibilities = {}
+        keypoint_names = {11: 'left_shoulder', 12: 'right_shoulder', 23: 'left_hip', 24: 'right_hip'}
+        for idx, name in keypoint_names.items():
+            if idx < len(landmarks):
+                required_keypoint_visibilities[name] = landmarks[idx].get('visibility', 0.0)
+        classified_view = classify_view(landmarks)
         debug_info = {
             'height_px': round(pixel_height, 2),
             'scale_cm_per_px': round(scale_cm_per_px, 4),
@@ -2156,6 +2401,13 @@ def calculate_measurements_enhanced(landmarks_data: dict, image_shape: tuple,
             'reliable_measurements': reliable_measurements,
             'excluded_measurements': excluded_measurements,
             'rejected_angles': rejected_reasons,
+            # New per-view debug fields
+            'detected_landmark_count': detected_landmark_count,
+            'required_keypoint_visibilities': required_keypoint_visibilities,
+            'classified_view': classified_view,
+            'front_back_width_px': debug_pixel_distances.get('shoulder_width') or debug_pixel_distances.get('hips_width'),
+            'side_depth_px': debug_pixel_distances.get('shoulder_width') if classified_view in ('left', 'right') else None,
+            'measurement_sources': {},
         }
         log_measurement_debug(debug_info)
         return {
@@ -2182,6 +2434,37 @@ def calculate_measurements_enhanced(landmarks_data: dict, image_shape: tuple,
         'shoulders': measurements.get('shoulder_width', 0) > 0
     }
 
+    # Compute additional debug fields for per-view analysis
+    detected_landmark_count = sum(1 for lm in landmarks if lm.get('visibility', 0) > LANDMARK_CONFIDENCE_THRESHOLD)
+
+    # Get visibility for required keypoints (indices 11, 12, 23, 24)
+    required_keypoint_visibilities = {}
+    keypoint_names = {11: 'left_shoulder', 12: 'right_shoulder', 23: 'left_hip', 24: 'right_hip'}
+    for idx, name in keypoint_names.items():
+        if idx < len(landmarks):
+            required_keypoint_visibilities[name] = landmarks[idx].get('visibility', 0.0)
+
+    # Classify view angle
+    classified_view = classify_view(landmarks)
+
+    # Calculate front_back_width_px and side_depth_px if available
+    front_back_width_px = debug_pixel_distances.get('shoulder_width') or debug_pixel_distances.get('hips_width')
+
+    # Calculate side depth (from shoulder width in profile view)
+    side_depth_px = None
+    if classified_view in ('left', 'right'):
+        # For side views, use shoulder width as depth proxy
+        side_depth_px = debug_pixel_distances.get('shoulder_width')
+
+    # Track measurement sources (ellipse_fusion vs fallback_factor)
+    measurement_sources = {}
+    if measurements.get('chest', 0) > 0:
+        measurement_sources['chest'] = 'ellipse_fusion'
+    if measurements.get('waist', 0) > 0:
+        measurement_sources['waist'] = 'ellipse_fusion'
+    if measurements.get('hips', 0) > 0:
+        measurement_sources['hips'] = 'ellipse_fusion'
+
     debug_info = {
         'height_px': round(pixel_height, 2),
         'user_height_cm': user_height_cm,
@@ -2194,7 +2477,14 @@ def calculate_measurements_enhanced(landmarks_data: dict, image_shape: tuple,
         'reliable_measurements': reliable_measurements,
         'excluded_measurements': excluded_measurements,
         'valid_angles_used': 1 if not rejected_reasons else 0,
-        'rejected_angles': rejected_reasons
+        'rejected_angles': rejected_reasons,
+        # New per-view debug fields
+        'detected_landmark_count': detected_landmark_count,
+        'required_keypoint_visibilities': required_keypoint_visibilities,
+        'classified_view': classified_view,
+        'front_back_width_px': front_back_width_px,
+        'side_depth_px': side_depth_px,
+        'measurement_sources': measurement_sources,
     }
     log_measurement_debug(debug_info)
 

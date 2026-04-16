@@ -7,7 +7,7 @@ from PIL import Image
 import numpy as np
 from pydantic import BaseModel, Field
 
-from app.models.schemas import ScanMeasureResponse, BodyMeasurements, ScanMeasureResponseV2, MeasurementConfidence, MeasurementConfidenceLevel
+from app.models.schemas import ScanMeasureResponse, BodyMeasurements, ScanMeasureResponseV2, MeasurementConfidence, MeasurementConfidenceLevel, MeasurementDebug
 from app.services.preprocessing import preprocess_image
 from app.services.mediapipe_extractor import extract_body_landmarks
 from app.services.measurement import (
@@ -20,6 +20,7 @@ from app.services.measurement import (
     calculate_measurements_calibrated,
     get_calibration_system,
     fuse_measurements,
+    fuse_multiview_circumference,
     calculate_fill_ratio,
     classify_framing,
     DEFAULT_USER_HEIGHT_CM
@@ -363,6 +364,10 @@ async def measure_body_enhanced(payload: MeasureBase64Request):
         if result.get('confidence'):
             confidence = MeasurementConfidence(**result['confidence'])
 
+        debug = None
+        if result.get('debug'):
+            debug = MeasurementDebug(**result['debug'])
+
         return ScanMeasureResponseV2(
             success=result['success'],
             scan_type=result['scan_type'],
@@ -371,7 +376,8 @@ async def measure_body_enhanced(payload: MeasureBase64Request):
             warnings=result.get('warnings', []),
             missing_landmarks=result.get('missing_landmarks', []),
             message="Measurements extracted successfully" if result['success'] else "Measurement failed",
-            landmarks=landmarks.get('landmarks', [])
+            landmarks=landmarks.get('landmarks', []),
+            debug=debug
         )
 
     except Exception as e:
@@ -384,7 +390,8 @@ async def measure_body_enhanced(payload: MeasureBase64Request):
             warnings=[f"Error processing image: {str(e)}"],
             missing_landmarks=[],
             message="Error processing image",
-            landmarks=[]
+            landmarks=[],
+            debug=None
         )
 
 
@@ -675,6 +682,7 @@ class MeasureMultipleResponse(BaseModel):
     scan_type: Optional[str] = Field("full_body", description="Scan type: full_body, upper_body, or invalid")
     confidence: Optional[dict] = Field(None, description="Confidence scores for each measurement")
     warnings: list[str] = Field(default_factory=list, description="Warnings about scan quality")
+    debug: Optional[dict] = Field(None, description="Debug information for measurements")
 
 
 @router.post("/measure-multiple", response_model=MeasureMultipleResponse)
@@ -762,6 +770,41 @@ async def measure_multiple_images(payload: MeasureMultipleRequest):
         # STEP 7: Multi-angle fusion - combine measurements from all valid angles
         fused_measurements, fusion_debug = fuse_measurements(all_measurements)
 
+        # STEP 8: Use ellipse-based fusion for circumference measurements (chest/waist/hips)
+        # This uses width from front/back + depth from left/right views
+        try:
+            # Prepare views dict for fuse_multiview_circumference
+            views_for_fusion = {}
+            for angle in ['front', 'back', 'left', 'right']:
+                if angle in all_landmarks and all_landmarks[angle]:
+                    angle_landmarks = all_landmarks[angle]
+                    # Use default image shape, actual doesn't matter for the ratio-based calculation
+                    angle_image_shape = (800, 800, 3)
+                    # Get pixel_height from the first available measurement for this angle
+                    angle_measurements = all_measurements.get(angle, {})
+                    angle_pixel_height = angle_measurements.get('pixel_height', 700) if angle_measurements else 700
+                    views_for_fusion[angle] = {
+                        'landmarks': angle_landmarks,
+                        'image_shape': angle_image_shape,
+                        'pixel_height': angle_pixel_height
+                    }
+
+            # Use new ellipse-based fusion for circumference measurements
+            if len(views_for_fusion) >= 2:
+                ellipse_result = fuse_multiview_circumference(views_for_fusion, user_height)
+                # Override chest/waist/hips with ellipse-based results
+                if ellipse_result.get('chest', 0) > 0:
+                    fused_measurements['chest'] = ellipse_result['chest']
+                if ellipse_result.get('waist', 0) > 0:
+                    fused_measurements['waist'] = ellipse_result['waist']
+                if ellipse_result.get('hips', 0) > 0:
+                    fused_measurements['hips'] = ellipse_result['hips']
+                # Update confidence with ellipse result confidence
+                if ellipse_result.get('confidence', 0) > 0:
+                    fusion_debug['circumference_confidence'] = ellipse_result['confidence']
+        except Exception as e:
+            print(f"Ellipse fusion failed: {e}")
+
         # Use fused measurements as combined measurements
         combined_measurements = fused_measurements if fused_measurements else None
         primary_scan_type = 'full_body'
@@ -794,8 +837,14 @@ async def measure_multiple_images(payload: MeasureMultipleRequest):
                 message=f"Could not detect body in: {', '.join(failed_images)}. Please ensure full body is visible.",
                 scan_type="invalid",
                 confidence=None,
-                warnings=["No valid measurements found - all images failed body detection"]
+                warnings=["No valid measurements found - all images failed body detection"],
+                debug=None
             )
+
+        # Collect debug info from front_enhanced if available
+        debug_info = None
+        if front_enhanced and front_enhanced.get('debug'):
+            debug_info = front_enhanced['debug']
 
         # Return measurements from the first successful image
         return MeasureMultipleResponse(
@@ -805,7 +854,8 @@ async def measure_multiple_images(payload: MeasureMultipleRequest):
             message=f"Successfully processed multiple images",
             scan_type=primary_scan_type,
             confidence=confidence_level,
-            warnings=primary_warnings
+            warnings=primary_warnings,
+            debug=debug_info
         )
 
     except Exception as e:
@@ -817,7 +867,8 @@ async def measure_multiple_images(payload: MeasureMultipleRequest):
             message=f"Error processing images: {str(e)}",
             scan_type="invalid",
             confidence=None,
-            warnings=[f"Error processing images: {str(e)}"]
+            warnings=[f"Error processing images: {str(e)}"],
+            debug=None
         )
 
 
