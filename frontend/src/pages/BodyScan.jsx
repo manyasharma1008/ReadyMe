@@ -8,7 +8,7 @@ import { scanMeasureEnhanced, scanMeasureMultiple } from "../api"
 import LoadingSpinner from "../components/common/LoadingSpinner"
 import ErrorMessage from "../components/common/ErrorMessage"
 import { FramingOverlay } from "../components/FramingOverlay"
-
+// skds
 // Validation utility
 const isValidHeight = (h) => {
   const num = Number(h)

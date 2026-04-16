@@ -11,6 +11,7 @@
     "check size",
     "measurement",
   ];
+  // woienf
   const PRODUCT_ROOT_SELECTORS = [
     "#productDetails_detailBullets_sections1",
     "#productDetail_techSpec_section_1",
