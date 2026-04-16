@@ -5,7 +5,7 @@
 
 import { createContext, useContext, useReducer, useCallback } from 'react'
 
-// Initial state
+// Initial statekmd
 const initialState = {
   // Body measurements from scan
   measurements: null,

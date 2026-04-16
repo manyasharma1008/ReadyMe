@@ -3,7 +3,7 @@ const READYME_PREVIEW_BASE_URL = "https://ready-me-liart.vercel.app";
 function getStorageKey(tabId) {
   return `readyMeLastRun_${tabId}`;
 }
-
+// wejbf
 function formatDebugSummary(state) {
   if (!state) return "No extraction run yet.";
 
