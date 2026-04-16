@@ -7,7 +7,8 @@ export default function LandingSection({
   images = [],
   slideDuration = 3000,
   onSelectImage,
-  isScanned
+  isScanned,
+  onPreview
 }) {
   const cardRef = useRef(null)
   const navigate = useNavigate()
@@ -138,12 +139,15 @@ export default function LandingSection({
 
         {/* Explore */}
         <button
-          onClick={() => isScanned && navigate("/preview")}
-          className={`px-8 py-3 font-mono text-xs tracking-[0.25em] uppercase transition
-            ${isScanned
-              ? "cta-btn border border-charcoal-700 text-charcoal-700"
-              : "border border-charcoal-700/20 text-charcoal-700/30 cursor-not-allowed"
-            }`}
+          onClick={() => {
+            if (onPreview) {
+              onPreview()
+              return
+            }
+
+            navigate("/preview")
+          }}
+          className="cta-btn border border-charcoal-700 px-8 py-3 font-mono text-xs tracking-[0.25em] uppercase text-charcoal-700 transition"
         >
           <span>EXPLORE VIRTUAL TRY-ON</span>
         </button>
@@ -152,7 +156,7 @@ export default function LandingSection({
 
       {!isScanned && (
         <p className="text-xs text-charcoal-700/40 mt-2">
-          Complete body scan to unlock try-on
+          Demo preview is available before scan
         </p>
       )}
 
