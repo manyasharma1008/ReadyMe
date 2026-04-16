@@ -4,8 +4,10 @@ Product Router - API endpoints for extracting size charts from product pages
 
 import re
 import os
+import ipaddress
+import socket
 from typing import Optional
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 from fastapi import APIRouter, HTTPException
 from app.models.schemas import (
     ProductExtractRequest,
@@ -61,6 +63,79 @@ MEASUREMENT_ALIASES = {
     "shoulders": "shoulder_width",
     "shoulder width": "shoulder_width",
 }
+
+BLOCKED_PRODUCT_HOSTNAMES = {"localhost"}
+
+
+def _is_blocked_ip_address(ip_address: str) -> bool:
+    try:
+        parsed_ip = ipaddress.ip_address(ip_address.split("%", 1)[0])
+    except ValueError:
+        return True
+
+    return (
+        parsed_ip.is_private
+        or parsed_ip.is_loopback
+        or parsed_ip.is_link_local
+        or parsed_ip.is_multicast
+        or parsed_ip.is_reserved
+        or parsed_ip.is_unspecified
+    )
+
+
+def validate_fetchable_product_url(raw_url: str) -> str:
+    """Allow only public HTTP(S) product URLs to avoid SSRF into local/private networks."""
+    parsed = urlparse(raw_url)
+    if parsed.scheme not in {"http", "https"}:
+        raise ValueError("Only http and https product URLs are supported")
+
+    hostname = (parsed.hostname or "").strip().lower()
+    if not hostname:
+        raise ValueError("Product URL must include a hostname")
+
+    if hostname in BLOCKED_PRODUCT_HOSTNAMES or hostname.endswith(".localhost"):
+        raise ValueError("Localhost URLs are not allowed")
+
+    try:
+        addresses = socket.getaddrinfo(
+            hostname,
+            parsed.port or (443 if parsed.scheme == "https" else 80),
+            type=socket.SOCK_STREAM,
+        )
+    except socket.gaierror as exc:
+        raise ValueError("Product URL hostname could not be resolved") from exc
+
+    for address in addresses:
+        ip_address = address[4][0]
+        if _is_blocked_ip_address(ip_address):
+            raise ValueError("Product URL resolves to a private or reserved address")
+
+    return raw_url
+
+
+def fetch_product_page(url: str, headers: dict, timeout: int = 10, max_redirects: int = 3):
+    """Fetch a product page while validating each redirect target."""
+    current_url = validate_fetchable_product_url(url)
+
+    for _ in range(max_redirects + 1):
+        response = requests.get(
+            current_url,
+            headers=headers,
+            timeout=timeout,
+            allow_redirects=False,
+        )
+
+        if response.is_redirect or response.is_permanent_redirect:
+            location = response.headers.get("Location")
+            if not location:
+                break
+            current_url = validate_fetchable_product_url(urljoin(current_url, location))
+            continue
+
+        response.raise_for_status()
+        return response
+
+    raise requests.exceptions.TooManyRedirects("Too many redirects while fetching product page")
 
 
 def detect_platform(url: str) -> str:
@@ -567,8 +642,7 @@ async def extract_product_size_chart(request: ProductExtractRequest):
             "Accept-Language": "en-US,en;q=0.5",
         }
 
-        response = requests.get(request.url, headers=headers, timeout=10)
-        response.raise_for_status()
+        response = fetch_product_page(request.url, headers=headers, timeout=10)
         html = response.text
 
         # Detect platform and extract data

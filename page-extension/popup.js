@@ -74,7 +74,7 @@ function buildRedirectUrl(payload, backendSync = null) {
     })
   );
 
-  return `${READYME_PREVIEW_BASE_URL}/?data=${encoded}`;
+  return `${READYME_PREVIEW_BASE_URL}/preview?data=${encoded}`;
 }
 
 document.addEventListener("DOMContentLoaded", () => {
