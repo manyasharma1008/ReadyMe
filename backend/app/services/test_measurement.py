@@ -231,3 +231,55 @@ def test_calculate_pixel_height_uses_specific_extremes():
     # The key is: uses specific landmarks AND applies correction
     assert 90 <= pixel_h <= 100, \
         f"pixel_height with correction should be ~95px for this landmark config, got {pixel_h}"
+
+
+def test_calculate_pixel_height_uses_vector_distance():
+    """calculate_pixel_height should compute Euclidean distance, not just Y-difference."""
+    from app.services.measurement import calculate_pixel_height
+
+    # Create landmarks where vector distance differs from Y-difference
+    # Nose at left side (x=0.3), ankles spread with midpoint at right side (x=0.7)
+    # This creates a diagonal vector that is LONGER than just Y-difference
+    landmarks = [{'x': 0.5, 'y': 0.5, 'visibility': 0.8}] * 33
+    landmarks[0] = {'x': 0.3, 'y': 0.1, 'visibility': 0.8}  # nose at left-top (index 0)
+    landmarks[27] = {'x': 0.5, 'y': 0.9, 'visibility': 0.8}  # left_ankle (index 27)
+    landmarks[28] = {'x': 0.9, 'y': 0.9, 'visibility': 0.8}  # right_ankle (index 28)
+
+    image_shape = (100, 100, 3)
+
+    # Ankle midpoint: x = (0.5 + 0.9)/2 = 0.7, y = (0.9 + 0.9)/2 = 0.9
+    # Vector: dx = 0.7 - 0.3 = 0.4, dy = 0.9 - 0.1 = 0.8
+    # Vector distance = sqrt(0.16 + 0.64) * 100 = sqrt(0.8) * 100 ≈ 89.44 px
+    # With 1.12 correction factor: 89.44 * 1.12 ≈ 100.17 px
+
+    # Old Y-difference only: (0.9 - 0.1) * 100 = 80 px -> with correction = 89.6 px
+    # Vector calculation should give ~100 px (different from Y-only ~90 px)
+
+    result = calculate_pixel_height(landmarks, image_shape)
+    assert result > 0, "Should return positive pixel height"
+    # Vector should give ~100 px (not ~90 px from Y-only)
+    assert abs(result - 100.2) < 1.0, f"Expected ~100.2 (vector), got {result}. Y-difference would give ~89.6"
+
+
+def test_calculate_pixel_height_non_square_image():
+    """Vector height must scale dx by width and dy by height, not both by height."""
+    import math
+    from app.services.measurement import calculate_pixel_height
+
+    # Create landmarks: nose at top, ankles at bottom with x offset
+    landmarks = [{'x': 0.5, 'y': 0.1, 'visibility': 0.9}] * 33
+    landmarks[0] = {'x': 0.5, 'y': 0.1, 'visibility': 0.9}  # nose
+    landmarks[27] = {'x': 0.6, 'y': 0.9, 'visibility': 0.9}  # left_ankle
+    landmarks[28] = {'x': 0.6, 'y': 0.9, 'visibility': 0.9}  # right_ankle
+
+    # Portrait image: 600 height, 800 width
+    image_shape = (600, 800, 3)
+
+    result = calculate_pixel_height(landmarks, image_shape, fallback_height_cm=170)
+
+    # dx = 0.1, dy = 0.8
+    # Correct: sqrt((0.1*800)^2 + (0.8*600)^2) = sqrt(6400 + 230400) = sqrt(236800) = 486.6
+    # Wrong: sqrt((0.1*600)^2 + (0.8*600)^2) = sqrt(3600 + 230400) = sqrt(234000) = 483.9
+    # After 1.12 correction factor
+    expected_correct = math.sqrt((0.1 * 800) ** 2 + (0.8 * 600) ** 2) * 1.12
+    assert abs(result - expected_correct) < 1, f"Expected ~{expected_correct}, got {result}"

@@ -606,6 +606,64 @@ def estimate_torso_pixel_height(landmarks: list, image_shape: tuple,
     return max(min_height, min(max_height, estimated_height))
 
 
+def estimate_height_from_hip_midpoint(landmarks: list, image_shape: tuple,
+                                       fallback_height_cm: float = DEFAULT_USER_HEIGHT_CM) -> float:
+    """
+    Estimate body height from hip midpoint when feet are not visible.
+
+    Uses hip landmarks (indices 23, 24) to compute midpoint, then applies
+    a ratio to estimate full body height based on typical human proportions.
+
+    Args:
+        landmarks: List of body landmarks
+        image_shape: Shape of the original image (height, width, channels)
+        fallback_height_cm: Fallback height in cm
+
+    Returns:
+        Estimated height in pixels
+    """
+    HEIGHT_CORRECTION_FACTOR = 1.12
+    HIP_TO_FULL_BODY_RATIO = 0.5  # Hip is approximately halfway down the body
+
+    if not landmarks or len(landmarks) < 25:
+        return estimate_torso_pixel_height(landmarks, image_shape, fallback_height_cm)
+
+    try:
+        head_landmark = landmarks[0]
+        left_hip = landmarks[23]
+        right_hip = landmarks[24]
+
+        head_visible = head_landmark.get('visibility', 0) > 0.5
+        hips_visible = (left_hip.get('visibility', 0) > TORSO_VISIBILITY_THRESHOLD and
+                        right_hip.get('visibility', 0) > TORSO_VISIBILITY_THRESHOLD)
+
+        if not head_visible or not hips_visible:
+            return estimate_torso_pixel_height(landmarks, image_shape, fallback_height_cm)
+
+        # Compute hip midpoint
+        hip_mid_x = (left_hip['x'] + right_hip['x']) / 2
+        hip_mid_y = (left_hip['y'] + right_hip['y']) / 2
+
+        # Compute vector distance from nose to hip midpoint
+        # IMPORTANT: Scale dx by width, dy by height for non-square images
+        dx = (hip_mid_x - head_landmark['x']) * image_shape[1]
+        dy = (hip_mid_y - head_landmark['y']) * image_shape[0]
+        hip_height_px = math.sqrt(dx * dx + dy * dy)
+
+        if hip_height_px <= 0:
+            return estimate_torso_pixel_height(landmarks, image_shape, fallback_height_cm)
+
+        # Extrapolate to full body height
+        pixel_height = hip_height_px / HIP_TO_FULL_BODY_RATIO
+
+        # Apply correction factor
+        pixel_height *= HEIGHT_CORRECTION_FACTOR
+
+        return pixel_height
+    except Exception:
+        return estimate_torso_pixel_height(landmarks, image_shape, fallback_height_cm)
+
+
 def interpolate_landmark(p1: dict, p2: dict, ratio: float) -> dict:
     """Interpolate a virtual landmark between two visible keypoints."""
     return {
@@ -665,6 +723,120 @@ def log_measurement_debug(debug_info: dict) -> None:
     print("[measurement_pipeline]", debug_info)
 
 
+def calculate_fill_ratio(landmarks: list, image_shape: tuple) -> dict:
+    """
+    Compute the fraction of the image frame occupied vertically by the body.
+
+    This is the RAW pixel-space fill ratio used for framing guidance.
+    It does NOT apply HEIGHT_CORRECTION_FACTOR — that correction exists for
+    measurement scaling, not for reporting how much of the frame the user fills.
+
+    Uses nose (idx 0) as top and ankle midpoint (idx 27, 28) as bottom.
+    Ankle midpoint matches what the user sees on screen better than max(ankle_y).
+
+    Args:
+        landmarks: List of 33 MediaPipe pose landmarks (normalized x,y,z,visibility)
+        image_shape: (height, width, channels) — height used for pixel conversion
+
+    Returns:
+        {
+            'fill_ratio': float,           # 0.0 if invalid, else (0,1]
+            'pixel_height': float,         # in pixels
+            'image_height': int,          # in pixels
+            'head_visible': bool,
+            'ankles_visible': bool,
+            'valid': bool,                 # head + >=1 ankle with visibility > 0.5
+        }
+    """
+    result = {
+        'fill_ratio': 0.0,
+        'pixel_height': 0.0,
+        'image_height': int(image_shape[0]) if image_shape else 0,
+        'head_visible': False,
+        'ankles_visible': False,
+        'valid': False,
+    }
+
+    if not landmarks or len(landmarks) < 29 or not image_shape or image_shape[0] <= 0:
+        return result
+
+    try:
+        nose = landmarks[0]
+        left_ankle = landmarks[27] if len(landmarks) > 27 else None
+        right_ankle = landmarks[28] if len(landmarks) > 28 else None
+
+        head_visible = nose.get('visibility', 0) > VISIBILITY_THRESHOLD
+        ankle_visibilities = [
+            lm.get('visibility', 0) for lm in (left_ankle, right_ankle) if lm is not None
+        ]
+        ankles_visible = any(v > VISIBILITY_THRESHOLD for v in ankle_visibilities)
+
+        result['head_visible'] = head_visible
+        result['ankles_visible'] = ankles_visible
+
+        if not (head_visible and ankles_visible):
+            return result
+
+        # Ankle midpoint using only visible ankles (symmetric if both visible)
+        visible_ankles = [
+            lm for lm in (left_ankle, right_ankle)
+            if lm is not None and lm.get('visibility', 0) > VISIBILITY_THRESHOLD
+        ]
+        ankle_y = sum(lm['y'] for lm in visible_ankles) / len(visible_ankles)
+
+        pixel_height = max(0.0, (ankle_y - nose['y']) * image_shape[0])
+        result['pixel_height'] = pixel_height
+        result['fill_ratio'] = pixel_height / image_shape[0] if image_shape[0] > 0 else 0.0
+        result['valid'] = result['fill_ratio'] > 0
+
+        return result
+    except Exception:
+        return result
+
+
+# Framing guidance thresholds (raw fill_ratio, no correction factor)
+FRAMING_TOO_FAR = 0.55
+FRAMING_IDEAL_MIN = 0.65
+FRAMING_IDEAL_MAX = 0.85
+FRAMING_TOO_CLOSE = 0.90
+
+
+def classify_framing(fill_info: dict) -> dict:
+    """
+    Classify framing into a user-facing guidance state.
+
+    Args:
+        fill_info: Output of calculate_fill_ratio()
+
+    Returns:
+        {
+            'status': 'too_far' | 'near_too_far' | 'ideal' | 'near_too_close' | 'too_close' | 'invalid',
+            'message': str,
+            'fill_ratio': float,
+        }
+    """
+    if not fill_info.get('valid'):
+        return {
+            'status': 'invalid',
+            'message': 'Stand in full view of the camera',
+            'fill_ratio': fill_info.get('fill_ratio', 0.0),
+        }
+
+    r = fill_info['fill_ratio']
+    if r < FRAMING_TOO_FAR:
+        status, message = 'too_far', 'Move closer to the camera'
+    elif r < FRAMING_IDEAL_MIN:
+        status, message = 'near_too_far', 'Almost there — a bit closer'
+    elif r <= FRAMING_IDEAL_MAX:
+        status, message = 'ideal', 'Perfect position — hold still'
+    elif r <= FRAMING_TOO_CLOSE:
+        status, message = 'near_too_close', 'Almost there — small step back'
+    else:
+        status, message = 'too_close', 'Step back slightly'
+
+    return {'status': status, 'message': message, 'fill_ratio': r}
+
+
 def calculate_pixel_height(landmarks: list, image_shape: tuple,
                             fallback_height_cm: float = DEFAULT_USER_HEIGHT_CM) -> float:
     """
@@ -691,7 +863,7 @@ def calculate_pixel_height(landmarks: list, image_shape: tuple,
         return 0.0
 
     try:
-        # Use nose (index 0) as head reference — it's the highest landmark on the body
+        # Use nose (index 0) as head reference
         head_landmark = landmarks[0] if len(landmarks) > 0 else None
         head_visible = head_landmark and head_landmark.get('visibility', 0) > 0.5
 
@@ -703,22 +875,31 @@ def calculate_pixel_height(landmarks: list, image_shape: tuple,
                 if lm.get('visibility', 0) > 0.5:
                     foot_candidates.append(lm)
 
-        if not head_visible or not foot_candidates:
-            return estimate_torso_pixel_height(landmarks, image_shape, fallback_height_cm)
+        if not head_visible or len(foot_candidates) < 2:
+            # Fallback: use hip midpoint when ankles not available
+            return estimate_height_from_hip_midpoint(landmarks, image_shape, fallback_height_cm)
 
-        head_y = head_landmark['y']
-        foot_y = max(lm['y'] for lm in foot_candidates)
-        pixel_height = (foot_y - head_y) * image_shape[0]
+        # Compute ankle midpoint
+        left_ankle = foot_candidates[0]
+        right_ankle = foot_candidates[1]
+        ankle_mid_x = (left_ankle['x'] + right_ankle['x']) / 2
+        ankle_mid_y = (left_ankle['y'] + right_ankle['y']) / 2
+
+        # Compute vector distance from nose to ankle midpoint
+        # IMPORTANT: Scale dx by width, dy by height for non-square images
+        dx = (ankle_mid_x - head_landmark['x']) * image_shape[1]
+        dy = (ankle_mid_y - head_landmark['y']) * image_shape[0]
+        pixel_height = math.sqrt(dx * dx + dy * dy)
 
         if pixel_height <= 0:
-            return estimate_torso_pixel_height(landmarks, image_shape, fallback_height_cm)
+            return estimate_height_from_hip_midpoint(landmarks, image_shape, fallback_height_cm)
 
-        # Apply correction factor for missing landmark extent (top of head, bottom of feet)
+        # Apply correction factor for missing landmark extent
         pixel_height *= HEIGHT_CORRECTION_FACTOR
 
         return pixel_height
     except Exception:
-        return estimate_torso_pixel_height(landmarks, image_shape, fallback_height_cm)
+        return estimate_height_from_hip_midpoint(landmarks, image_shape, fallback_height_cm)
 
 
 def measure_from_ratio(pixel_distance: float, pixel_height: float,
@@ -748,53 +929,30 @@ def measure_from_ratio(pixel_distance: float, pixel_height: float,
 def calculate_height(landmarks: list, image_shape: tuple,
                       user_height_cm: float = DEFAULT_USER_HEIGHT_CM) -> float:
     """
-    Calculate body height from pose landmarks.
+    Return the user's self-reported height in cm, validated against pose landmarks.
 
-    Uses min/max Y from ALL visible landmarks (robust to pose/tilt).
-    Applies ratio-based normalization to convert pixels to cm.
+    Absolute metric height is NOT recoverable from normalized pose landmarks
+    alone (no camera intrinsics, no reference object). `user_height_cm` is the
+    calibration reference the rest of the pipeline already depends on via
+    `measure_from_ratio`, so we return it here verbatim when the view is valid.
 
-    Args:
-        landmarks: List of body landmarks
-        image_shape: Shape of the original image
-        user_height_cm: User's actual height in cm for ratio normalization
-
-    Returns:
-        Estimated height in cm
+    Returns 0.0 for upper-body-only views so fusion drops this view's height
+    contribution.
     """
-    if not landmarks or len(landmarks) < 29:
-        return user_height_cm
+    if not landmarks or len(landmarks) < 29 or user_height_cm is None or user_height_cm <= 0:
+        return 0.0
 
     try:
-        # Use nose (index 0) as head reference, ankles (27, 28) as feet reference
-        if landmarks[0].get('visibility', 0) <= 0.5:
-            return user_height_cm
-
-        foot_candidates = []
-        for idx in [27, 28]:
-            if len(landmarks) > idx and landmarks[idx].get('visibility', 0) > 0.5:
-                foot_candidates.append(landmarks[idx])
-
-        if not foot_candidates:
-            return user_height_cm
-
-        head_y = landmarks[0]['y']
-        foot_y = max(lm['y'] for lm in foot_candidates)
-        pixel_height = (foot_y - head_y) * image_shape[0]
-
-        if pixel_height <= 0:
-            return user_height_cm
-
-        # Apply correction factor since MediaPipe landmarks miss top of head and bottom of feet
-        # The correction factor accounts for the ~12% missing vertical extent
-        HEIGHT_CORRECTION_FACTOR = 1.12
-
-        # Convert using ratio normalization with correction applied to pixel_height
-        # height_cm = (corrected_pixel_height / image_height) * user_height_cm
-        height_cm = (pixel_height * HEIGHT_CORRECTION_FACTOR / image_shape[0]) * user_height_cm
-
-        return height_cm
+        head_ok = landmarks[0].get('visibility', 0) > VISIBILITY_THRESHOLD
+        ankle_ok = any(
+            landmarks[idx].get('visibility', 0) > VISIBILITY_THRESHOLD
+            for idx in (27, 28) if len(landmarks) > idx
+        )
+        if not (head_ok and ankle_ok):
+            return 0.0
+        return float(user_height_cm)
     except Exception:
-        return user_height_cm
+        return 0.0
 
 
 def validate_shoulders(landmarks: list, image_shape: tuple = None) -> tuple[bool, str]:
@@ -1456,8 +1614,13 @@ def calculate_measurements_enhanced(landmarks_data: dict, image_shape: tuple,
     try:
         # Scale is derived directly from visible head-to-foot keypoints.
         has_visible_feet = bool(get_visible_landmarks(landmarks, FOOT_LANDMARK_INDICES))
-        pixel_height = calculate_pixel_height(landmarks, image_shape, user_height_cm)
-        if pixel_height <= 0:
+
+        # Unified fill-ratio computation (shared with framing guidance)
+        fill_info = calculate_fill_ratio(landmarks, image_shape)
+        pixel_height = fill_info['pixel_height']
+        fill_ratio = fill_info['fill_ratio']
+
+        if not fill_info['valid'] or pixel_height <= 0:
             return {
                 'success': False,
                 'scan_type': 'invalid',
@@ -1465,11 +1628,17 @@ def calculate_measurements_enhanced(landmarks_data: dict, image_shape: tuple,
                 'confidence': empty_confidence,
                 'warnings': warnings + ['Could not compute body height from head-to-foot landmarks.'],
                 'missing_landmarks': missing_landmarks,
-                'can_calibrate': False
+                'can_calibrate': False,
+                'fill_ratio': fill_ratio,
+                'framing': classify_framing(fill_info),
             }
+
+        # NOTE: measurement math below still uses pixel_height WITH the 1.12
+        # correction. Recompute it locally for ratio normalization — do NOT
+        # overwrite `pixel_height` above (that value is the raw fill for UI).
+        pixel_height_corrected = calculate_pixel_height(landmarks, image_shape, user_height_cm)
+
         # Validate pixel_height: subject must fill at least MIN_PIXEL_HEIGHT_RATIO of the image
-        image_height = image_shape[0]
-        fill_ratio = pixel_height / image_height if image_height > 0 else 0.0
         if fill_ratio < MIN_PIXEL_HEIGHT_RATIO:
             return {
                 'success': False,
@@ -1478,13 +1647,15 @@ def calculate_measurements_enhanced(landmarks_data: dict, image_shape: tuple,
                 'confidence': empty_confidence,
                 'warnings': warnings + [f'Subject too far from camera (fill_ratio={fill_ratio:.0%}, minimum={MIN_PIXEL_HEIGHT_RATIO:.0%}). Please step closer.'],
                 'missing_landmarks': missing_landmarks,
-                'can_calibrate': False
+                'can_calibrate': False,
+                'fill_ratio': fill_ratio,
+                'framing': classify_framing(fill_info),
             }
         if not has_visible_feet:
             height_estimation_mode = 'torso_fallback'
             warnings.append('Using torso-based height estimate because feet were not fully visible.')
 
-        scale_cm_per_px = calculate_scale_cm_per_pixel(pixel_height, user_height_cm)
+        scale_cm_per_px = calculate_scale_cm_per_pixel(pixel_height_corrected, user_height_cm)
         if scale_cm_per_px <= 0:
             return {
                 'success': False,
@@ -1493,7 +1664,9 @@ def calculate_measurements_enhanced(landmarks_data: dict, image_shape: tuple,
                 'confidence': empty_confidence,
                 'warnings': warnings + ['A valid user height is required to scale measurements.'],
                 'missing_landmarks': missing_landmarks,
-                'can_calibrate': False
+                'can_calibrate': False,
+                'fill_ratio': fill_ratio,
+                'framing': classify_framing(fill_info),
             }
 
         shoulders_valid, shoulder_reason = validate_shoulders(landmarks, image_shape)
@@ -1576,7 +1749,7 @@ def calculate_measurements_enhanced(landmarks_data: dict, image_shape: tuple,
 
             if width_valid:
                 shoulder_width, _ = calculate_shoulder_width(
-                    landmarks, image_shape, pixel_height, user_height_cm
+                    landmarks, image_shape, pixel_height_corrected, user_height_cm
                 )
                 measurements['shoulder_width'] = round(shoulder_width, 1) if shoulder_width > 0 else 0.0
             else:
@@ -1584,12 +1757,12 @@ def calculate_measurements_enhanced(landmarks_data: dict, image_shape: tuple,
 
             if width_valid:
                 chest_cm, _ = calculate_chest(
-                    landmarks, image_shape, pixel_height, user_height_cm
+                    landmarks, image_shape, pixel_height_corrected, user_height_cm
                 )
                 measurements['chest'] = round(chest_cm, 1) if chest_cm > 0 else 0.0
 
             hips_cm, hips_valid = calculate_hips(
-                landmarks, image_shape, pixel_height, user_height_cm
+                landmarks, image_shape, pixel_height_corrected, user_height_cm
             )
             measurements['hips'] = round(hips_cm, 1) if hips_valid and hips_cm > 0 else 0.0
 
@@ -1601,13 +1774,13 @@ def calculate_measurements_enhanced(landmarks_data: dict, image_shape: tuple,
 
             if width_valid and hips_valid:
                 waist_cm, waist_valid = calculate_waist(
-                    landmarks, image_shape, pixel_height, user_height_cm
+                    landmarks, image_shape, pixel_height_corrected, user_height_cm
                 )
                 measurements['waist'] = round(waist_cm, 1) if waist_valid and waist_cm > 0 else 0.0
             elif width_valid and not hips_valid:
                 # Waist fallback: use shoulder-based ratio when hips unavailable
                 waist_cm, waist_valid = calculate_waist(
-                    landmarks, image_shape, pixel_height, user_height_cm
+                    landmarks, image_shape, pixel_height_corrected, user_height_cm
                 )
                 if waist_valid and waist_cm > 0:
                     measurements['waist'] = round(waist_cm, 1)
@@ -1741,5 +1914,9 @@ def calculate_measurements_enhanced(landmarks_data: dict, image_shape: tuple,
         'warnings': warnings,
         'missing_landmarks': missing_landmarks,
         'can_calibrate': use_calibration,
-        'debug': debug_info
+        'debug': debug_info,
+        # New fields:
+        'fill_ratio': round(fill_ratio, 3),
+        'pixel_height': round(pixel_height, 1),
+        'framing': classify_framing(fill_info),
     }
