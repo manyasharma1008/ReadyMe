@@ -59,6 +59,11 @@ WAIST_LINE_RATIO = 0.55
 CHEST_CIRCUMFERENCE_FACTOR = 2.15
 WAIST_CIRCUMFERENCE_FACTOR = 2.0
 HIP_CIRCUMFERENCE_FACTOR = 2.2
+# Fallback circumference factors (used only when depth is unmeasurable)
+# Updated to reflect actual torso depth/width ratios ~0.70
+FALLBACK_CHEST_CIRCUMFERENCE_FACTOR = 2.65
+FALLBACK_WAIST_CIRCUMFERENCE_FACTOR = 2.60
+FALLBACK_HIP_CIRCUMFERENCE_FACTOR = 2.75
 HEAD_TO_HIP_HEIGHT_RATIO = 0.52
 MIN_ESTIMATED_HEIGHT_MULTIPLIER = 0.45
 MAX_ESTIMATED_HEIGHT_MULTIPLIER = 1.15
@@ -1195,6 +1200,289 @@ def is_front_view(landmarks: list) -> bool:
         return False
 
 
+def classify_view(landmarks: list) -> str:
+    """
+    Classify view as front/back/left/right/unknown.
+
+    Uses shoulder horizontal separation (large = front/back, small = profile)
+    and facial landmark visibility to distinguish front from back.
+
+    Args:
+        landmarks: List of 33 MediaPipe Pose landmarks
+
+    Returns:
+        "front", "back", "left", "right", or "unknown"
+    """
+    if not landmarks or len(landmarks) < 25:
+        return "unknown"
+
+    try:
+        left_shoulder = landmarks[11]
+        right_shoulder = landmarks[12]
+
+        # Check shoulder visibility
+        if left_shoulder.get('visibility', 0) < LANDMARK_CONFIDENCE_THRESHOLD or \
+           right_shoulder.get('visibility', 0) < LANDMARK_CONFIDENCE_THRESHOLD:
+            return "unknown"
+
+        delta_x = abs(right_shoulder['x'] - left_shoulder['x'])
+        delta_y = abs(right_shoulder['y'] - left_shoulder['y'])
+
+        # Shoulder separation threshold (front/back have wide shoulders)
+        is_profile = delta_x < 0.12
+
+        if is_profile:
+            # Distinguish left from right using nose position
+            nose = landmarks[0]
+            if nose.get('visibility', 0) > LANDMARK_CONFIDENCE_THRESHOLD:
+                # If nose is closer to left edge, it's a right view
+                return "right" if nose['x'] < 0.5 else "left"
+            return "unknown"
+        else:
+            # Front vs back: use facial landmark visibility asymmetry
+            left_eye = landmarks[1]
+            right_eye = landmarks[2]
+            left_visibility = left_eye.get('visibility', 0)
+            right_visibility = right_eye.get('visibility', 0)
+
+            if abs(left_visibility - right_visibility) > 0.2:
+                return "back" if left_visibility > right_visibility else "front"
+
+            # Fallback: check nose z if available
+            nose = landmarks[0]
+            if nose.get('visibility', 0) > LANDMARK_CONFIDENCE_THRESHOLD:
+                # Positive z typically means facing camera (front)
+                return "front" if nose.get('z', 0) > -0.1 else "back"
+
+            # Default to front if we can't tell
+            return "front"
+
+    except (KeyError, IndexError, TypeError):
+        return "unknown"
+
+
+def measure_width_cm_at_y(landmarks: list, image_shape: tuple, pixel_height: float,
+                          user_height_cm: float, y_ratio: float) -> float:
+    """
+    Measure body width at a given vertical position (y_ratio from shoulders).
+
+    For front/back views: measures horizontal extent (left-right width).
+    For left/right views: measures front-back depth (same code path, different semantic).
+
+    Args:
+        landmarks: List of 33 MediaPipe Pose landmarks
+        image_shape: Shape of the image (height, width, channels)
+        pixel_height: Body height in pixels
+        user_height_cm: User's height in cm
+        y_ratio: Ratio from shoulder line (0.0 = shoulders, 0.5 = mid-torso, 1.0 = hips)
+
+    Returns:
+        Width or depth in cm
+    """
+    if not landmarks or len(landmarks) < 25 or pixel_height <= 0:
+        return 0.0
+
+    try:
+        left_shoulder = landmarks[11]
+        right_shoulder = landmarks[12]
+        left_hip = landmarks[23]
+        right_hip = landmarks[24]
+
+        # Check minimum visibility
+        for lm in [left_shoulder, right_shoulder, left_hip, right_hip]:
+            if lm.get('visibility', 0) < TORSO_VISIBILITY_THRESHOLD:
+                return 0.0
+
+        # Interpolate left/right positions at y_ratio
+        left_point = interpolate_landmark(left_shoulder, left_hip, y_ratio)
+        right_point = interpolate_landmark(right_shoulder, right_hip, y_ratio)
+
+        # Measure horizontal extent
+        extent_px = horizontal_distance_px(left_point, right_point, image_shape)
+
+        # Convert to cm using ratio normalization
+        return measure_from_ratio(extent_px, pixel_height, user_height_cm)
+
+    except (KeyError, IndexError, TypeError, ZeroDivisionError):
+        return 0.0
+
+
+def measure_depth_cm_at_y(landmarks: list, image_shape: tuple, pixel_height: float,
+                          user_height_cm: float, y_ratio: float) -> float:
+    """
+    Measure body depth at a given vertical position.
+
+    For left/right views: measures horizontal extent which maps to front-back depth.
+    Uses the same implementation as width measurement - the difference is semantic.
+
+    Args:
+        landmarks: List of 33 MediaPipe Pose landmarks
+        image_shape: Shape of the image (height, width, channels)
+        pixel_height: Body height in pixels
+        user_height_cm: User's height in cm
+        y_ratio: Ratio from shoulder line (0.0 = shoulders, 0.5 = mid-torso, 1.0 = hips)
+
+    Returns:
+        Depth in cm
+    """
+    return measure_width_cm_at_y(landmarks, image_shape, pixel_height, user_height_cm, y_ratio)
+
+
+def ramanujan_ellipse_perimeter(width_cm: float, depth_cm: float) -> float:
+    """
+    Calculate ellipse circumference using Ramanujan's approximation.
+
+    C ≈ π × [ 3(a+b) − √((3a+b)(a+3b)) ]
+    where a = width/2, b = depth/2
+
+    Accuracy ~0.04% for typical body proportions.
+
+    Args:
+        width_cm: Body width in cm (left-right extent)
+        depth_cm: Body depth in cm (front-back extent)
+
+    Returns:
+        Circumference in cm
+    """
+    if width_cm <= 0 or depth_cm <= 0:
+        return 0.0
+
+    a = width_cm / 2.0  # semi-major axis
+    b = depth_cm / 2.0  # semi-minor axis
+
+    # Ramanujan's approximation
+    term1 = 3 * (a + b)
+    term2 = math.sqrt((3 * a + b) * (a + 3 * b))
+    perimeter = math.pi * (term1 - term2)
+
+    return perimeter if perimeter > 0 else 0.0
+
+
+def find_waist_y_ratio(landmarks: list, pixel_height: float,
+                       user_height_cm: float = DEFAULT_USER_HEIGHT_CM) -> float:
+    """
+    Find the y-ratio where body width is minimum (natural waist).
+
+    Searches y-ratios from 0.40 to 0.70 in steps of 0.02.
+
+    Args:
+        landmarks: List of 33 MediaPipe Pose landmarks
+        pixel_height: Body height in pixels
+        user_height_cm: User's height in cm
+
+    Returns:
+        y-ratio at minimum width (natural waist)
+    """
+    if not landmarks or pixel_height <= 0:
+        return WAIST_LINE_RATIO  # Fallback to default
+
+    try:
+        image_shape = (int(pixel_height), int(pixel_height), 3)
+
+        min_width = float('inf')
+        best_y_ratio = WAIST_LINE_RATIO
+
+        # Search for minimum width between 40% and 70% of torso
+        for y_ratio in [r / 100.0 for r in range(40, 72, 2)]:
+            width = measure_width_cm_at_y(landmarks, image_shape, pixel_height,
+                                          user_height_cm, y_ratio)
+            if width > 0 and width < min_width:
+                min_width = width
+                best_y_ratio = y_ratio
+
+        return best_y_ratio
+    except Exception:
+        return WAIST_LINE_RATIO
+
+
+def find_hip_y_ratio(landmarks: list, pixel_height: float,
+                     user_height_cm: float = DEFAULT_USER_HEIGHT_CM) -> float:
+    """
+    Find the y-ratio where body width is maximum (widest hip point).
+
+    Starts from hip landmark position and scans downward toward knees.
+
+    Args:
+        landmarks: List of 33 MediaPipe Pose landmarks
+        pixel_height: Body height in pixels
+        user_height_cm: User's height in cm
+
+    Returns:
+        y-ratio at maximum width (widest hip)
+    """
+    if not landmarks or pixel_height <= 0:
+        return 0.75  # Fallback
+
+    try:
+        # Get hip landmark y position as starting point
+        left_hip = landmarks[23]
+        right_hip = landmarks[24]
+
+        if left_hip.get('visibility', 0) < TORSO_VISIBILITY_THRESHOLD or \
+           right_hip.get('visibility', 0) < TORSO_VISIBILITY_THRESHOLD:
+            return 0.75
+
+        # Hip landmarks are at ~0.6-0.7 normalized y in typical poses
+        # Scan downward (higher y values) to find maximum width
+        hip_y = (left_hip['y'] + right_hip['y']) / 2
+
+        image_shape = (int(pixel_height), int(pixel_height), 3)
+
+        max_width = 0.0
+        best_y_ratio = hip_y
+
+        # Search from hip position toward knees (0.75 to 0.85)
+        for y_ratio in [r / 100.0 for r in range(int(hip_y * 100) + 2, 85, 1)]:
+            width = measure_width_cm_at_y(landmarks, image_shape, pixel_height,
+                                          user_height_cm, y_ratio)
+            if width > max_width:
+                max_width = width
+                best_y_ratio = y_ratio
+
+        return best_y_ratio
+    except Exception:
+        return 0.75
+
+
+def find_chest_y_ratio(landmarks: list, pixel_height: float,
+                       waist_y_ratio: float,
+                       user_height_cm: float = DEFAULT_USER_HEIGHT_CM) -> float:
+    """
+    Find the y-ratio where body width is maximum in upper torso (chest).
+
+    Searches bounded between shoulders and waist for maximum width.
+
+    Args:
+        landmarks: List of 33 MediaPipe Pose landmarks
+        pixel_height: Body height in pixels
+        waist_y_ratio: The y-ratio where waist was found
+        user_height_cm: User's height in cm
+
+    Returns:
+        y-ratio at maximum width (chest)
+    """
+    if not landmarks or pixel_height <= 0:
+        return CHEST_LINE_RATIO  # Fallback
+
+    try:
+        image_shape = (int(pixel_height), int(pixel_height), 3)
+
+        max_width = 0.0
+        best_y_ratio = CHEST_LINE_RATIO
+
+        # Search from shoulders (0.0) to waist
+        for y_ratio in [r / 100.0 for r in range(5, int(waist_y_ratio * 100), 2)]:
+            width = measure_width_cm_at_y(landmarks, image_shape, pixel_height,
+                                          user_height_cm, y_ratio)
+            if width > max_width:
+                max_width = width
+                best_y_ratio = y_ratio
+
+        return best_y_ratio
+    except Exception:
+        return CHEST_LINE_RATIO
+
+
 def fuse_measurements(measurements_by_angle: dict) -> tuple[dict, dict]:
     """
     STEP 7: Multi-angle fusion.
@@ -1620,23 +1908,23 @@ def calculate_measurements_enhanced(landmarks_data: dict, image_shape: tuple,
         pixel_height = fill_info['pixel_height']
         fill_ratio = fill_info['fill_ratio']
 
-        if not fill_info['valid'] or pixel_height <= 0:
+        # NOTE: measurement math uses pixel_height WITH the 1.12 correction.
+        # Calculate corrected pixel height (which includes torso fallback)
+        pixel_height_corrected = calculate_pixel_height(landmarks, image_shape, user_height_cm)
+
+        # Check if we have valid height from either full-body or torso fallback
+        if pixel_height_corrected <= 0:
             return {
                 'success': False,
                 'scan_type': 'invalid',
                 'measurements': {},
                 'confidence': empty_confidence,
-                'warnings': warnings + ['Could not compute body height from head-to-foot landmarks.'],
+                'warnings': warnings + ['Could not compute body height from head-to-foot landmarks or torso fallback.'],
                 'missing_landmarks': missing_landmarks,
                 'can_calibrate': False,
                 'fill_ratio': fill_ratio,
                 'framing': classify_framing(fill_info),
             }
-
-        # NOTE: measurement math below still uses pixel_height WITH the 1.12
-        # correction. Recompute it locally for ratio normalization — do NOT
-        # overwrite `pixel_height` above (that value is the raw fill for UI).
-        pixel_height_corrected = calculate_pixel_height(landmarks, image_shape, user_height_cm)
 
         # Validate pixel_height: subject must fill at least MIN_PIXEL_HEIGHT_RATIO of the image
         if fill_ratio < MIN_PIXEL_HEIGHT_RATIO:
@@ -1645,12 +1933,17 @@ def calculate_measurements_enhanced(landmarks_data: dict, image_shape: tuple,
                 'scan_type': 'invalid',
                 'measurements': {},
                 'confidence': empty_confidence,
-                'warnings': warnings + [f'Subject too far from camera (fill_ratio={fill_ratio:.0%}, minimum={MIN_PIXEL_HEIGHT_RATIO:.0%}). Please step closer.'],
+                'warnings': warnings + [
+                    f'Subject too far from camera (fill_ratio={fill_ratio:.0%}, '
+                    f'minimum={MIN_PIXEL_HEIGHT_RATIO:.0%}). Please step closer.'
+                ],
                 'missing_landmarks': missing_landmarks,
                 'can_calibrate': False,
                 'fill_ratio': fill_ratio,
                 'framing': classify_framing(fill_info),
             }
+
+        # Determine if we're using full body or torso fallback
         if not has_visible_feet:
             height_estimation_mode = 'torso_fallback'
             warnings.append('Using torso-based height estimate because feet were not fully visible.')

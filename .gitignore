@@ -5,3 +5,4 @@ models/weights/
 .env
 backend/app/models/weights/
 *.keras
+.worktrees/

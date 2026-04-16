@@ -283,3 +283,437 @@ def test_calculate_pixel_height_non_square_image():
     # After 1.12 correction factor
     expected_correct = math.sqrt((0.1 * 800) ** 2 + (0.8 * 600) ** 2) * 1.12
     assert abs(result - expected_correct) < 1, f"Expected ~{expected_correct}, got {result}"
+
+
+def test_torso_fallback_when_ankles_invisible():
+    """calculate_measurements_enhanced should use torso fallback when ankles not visible."""
+    from app.services.measurement import calculate_measurements_enhanced
+
+    # Create 4 angles with ankles invisible but hips visible
+    landmarks = [[{'x': 0.5, 'y': 0.3, 'visibility': 0.8}] * 33 for _ in range(4)]
+
+    # Make nose visible, ankles invisible, hips visible
+    for angle_landmarks in landmarks:
+        angle_landmarks[0] = {'x': 0.5, 'y': 0.2, 'visibility': 0.9}  # nose
+        angle_landmarks[27] = {'x': 0.5, 'y': 0.9, 'visibility': 0.1}  # left_ankle (invisible)
+        angle_landmarks[28] = {'x': 0.5, 'y': 0.9, 'visibility': 0.1}  # right_ankle (invisible)
+        angle_landmarks[23] = {'x': 0.5, 'y': 0.6, 'visibility': 0.8}  # left_hip
+        angle_landmarks[24] = {'x': 0.5, 'y': 0.6, 'visibility': 0.8}  # right_hip
+
+    image_shape = (1000, 800, 3)
+
+    result = calculate_measurements_enhanced(landmarks, image_shape, user_height_cm=170)
+
+    # Should NOT return success=False with "Could not compute body height"
+    # Should instead use torso fallback and return success=True
+    assert result.get('success') is True, f"Expected success=True with torso fallback, got {result.get('success')}"
+    assert 'torso' in result.get('height_estimation_mode', '').lower() or 'hip' in result.get('height_estimation_mode', '').lower(), \
+        f"Expected torso/hip fallback mode, got {result.get('height_estimation_mode')}"
+
+
+# Tests for classify_view function
+def test_classify_view_front():
+    """Front view: shoulders wide apart, small vertical difference."""
+    from app.services.measurement import classify_view
+
+    # Front view: shoulders wide apart (delta_x > 0.12)
+    front_landmarks = [
+        {'x': 0.5, 'y': 0.3, 'z': 0.0, 'visibility': 0.9} if i == 0 else
+        {'x': 0.3, 'y': 0.3, 'z': 0.0, 'visibility': 0.9} if i == 11 else
+        {'x': 0.7, 'y': 0.3, 'z': 0.0, 'visibility': 0.9} if i == 12 else
+        {'x': 0.3, 'y': 0.25, 'z': 0.0, 'visibility': 0.9} if i == 1 else  # left_eye
+        {'x': 0.7, 'y': 0.25, 'z': 0.0, 'visibility': 0.9} if i == 2 else  # right_eye
+        {'x': 0.5, 'y': 0.8, 'z': 0.0, 'visibility': 0.9} if i == 23 else
+        {'x': 0.5, 'y': 0.8, 'z': 0.0, 'visibility': 0.9} if i == 24 else
+        {'x': 0.5, 'y': 0.5, 'z': 0.0, 'visibility': 0.9}
+        for i in range(33)
+    ]
+    result = classify_view(front_landmarks)
+    assert result == "front", f"Expected 'front', got '{result}'"
+
+
+def test_classify_view_left():
+    """Left view: shoulders closer together horizontally."""
+    from app.services.measurement import classify_view
+
+    # Left view: shoulders close together (delta_x < 0.12), nose closer to right
+    left_landmarks = [
+        {'x': 0.6, 'y': 0.3, 'z': 0.0, 'visibility': 0.9} if i == 0 else  # nose on right side
+        {'x': 0.48, 'y': 0.3, 'z': 0.0, 'visibility': 0.9} if i == 11 else
+        {'x': 0.52, 'y': 0.3, 'z': 0.0, 'visibility': 0.9} if i == 12 else
+        {'x': 0.5, 'y': 0.8, 'z': 0.0, 'visibility': 0.9} if i == 23 else
+        {'x': 0.5, 'y': 0.8, 'z': 0.0, 'visibility': 0.9} if i == 24 else
+        {'x': 0.5, 'y': 0.5, 'z': 0.0, 'visibility': 0.9}
+        for i in range(33)
+    ]
+    result = classify_view(left_landmarks)
+    assert result == "left", f"Expected 'left', got '{result}'"
+
+
+def test_classify_view_right():
+    """Right view: shoulders close together, nose closer to left."""
+    from app.services.measurement import classify_view
+
+    # Right view: shoulders close together, nose on left side
+    right_landmarks = [
+        {'x': 0.4, 'y': 0.3, 'z': 0.0, 'visibility': 0.9} if i == 0 else  # nose on left side
+        {'x': 0.48, 'y': 0.3, 'z': 0.0, 'visibility': 0.9} if i == 11 else
+        {'x': 0.52, 'y': 0.3, 'z': 0.0, 'visibility': 0.9} if i == 12 else
+        {'x': 0.5, 'y': 0.8, 'z': 0.0, 'visibility': 0.9} if i == 23 else
+        {'x': 0.5, 'y': 0.8, 'z': 0.0, 'visibility': 0.9} if i == 24 else
+        {'x': 0.5, 'y': 0.5, 'z': 0.0, 'visibility': 0.9}
+        for i in range(33)
+    ]
+    result = classify_view(right_landmarks)
+    assert result == "right", f"Expected 'right', got '{result}'"
+
+
+def test_classify_view_back():
+    """Back view: shoulders wide apart, facial landmarks less visible or asymmetric."""
+    from app.services.measurement import classify_view
+
+    # Back view: wide shoulders, left eye more visible (camera sees person's back)
+    back_landmarks = [
+        {'x': 0.5, 'y': 0.3, 'z': -0.1, 'visibility': 0.9} if i == 0 else
+        {'x': 0.3, 'y': 0.3, 'z': 0.0, 'visibility': 0.9} if i == 11 else
+        {'x': 0.7, 'y': 0.3, 'z': 0.0, 'visibility': 0.9} if i == 12 else
+        {'x': 0.3, 'y': 0.25, 'z': 0.0, 'visibility': 0.9} if i == 1 else  # left_eye more visible
+        {'x': 0.7, 'y': 0.25, 'z': 0.0, 'visibility': 0.6} if i == 2 else  # right_eye less visible
+        {'x': 0.5, 'y': 0.8, 'z': 0.0, 'visibility': 0.9} if i == 23 else
+        {'x': 0.5, 'y': 0.8, 'z': 0.0, 'visibility': 0.9} if i == 24 else
+        {'x': 0.5, 'y': 0.5, 'z': 0.0, 'visibility': 0.9}
+        for i in range(33)
+    ]
+    result = classify_view(back_landmarks)
+    assert result == "back", f"Expected 'back', got '{result}'"
+
+
+def test_classify_view_unknown():
+    """Unknown view: barely visible shoulders."""
+    from app.services.measurement import classify_view
+
+    # Ambiguous landmarks with low visibility
+    ambiguous_landmarks = [
+        {'x': 0.5, 'y': 0.3, 'z': 0.0, 'visibility': 0.3} if i == 0 else
+        {'x': 0.45, 'y': 0.3, 'z': 0.0, 'visibility': 0.3} if i == 11 else
+        {'x': 0.55, 'y': 0.3, 'z': 0.0, 'visibility': 0.3} if i == 12 else
+        {'x': 0.5, 'y': 0.8, 'z': 0.0, 'visibility': 0.3} if i == 23 else
+        {'x': 0.5, 'y': 0.8, 'z': 0.0, 'visibility': 0.3} if i == 24 else
+        {'x': 0.5, 'y': 0.5, 'z': 0.0, 'visibility': 0.3}
+        for i in range(33)
+    ]
+    result = classify_view(ambiguous_landmarks)
+    assert result == "unknown", f"Expected 'unknown', got '{result}'"
+
+
+def test_classify_view_empty_landmarks():
+    """Empty or None landmarks should return unknown."""
+    from app.services.measurement import classify_view
+
+    assert classify_view([]) == "unknown"
+    assert classify_view(None) == "unknown"
+
+
+# Tests for measure_width_cm_at_y and measure_depth_cm_at_y
+def test_measure_width_cm_at_y_basic():
+    """Test basic width measurement at shoulder level."""
+    from app.services.measurement import measure_width_cm_at_y
+
+    # Front view: shoulders at x=0.3 and x=0.7 (delta_x = 0.4)
+    landmarks = [
+        {'x': 0.5, 'y': 0.3, 'z': 0.0, 'visibility': 0.9} if i == 0 else
+        {'x': 0.3, 'y': 0.3, 'z': 0.0, 'visibility': 0.9} if i == 11 else
+        {'x': 0.7, 'y': 0.3, 'z': 0.0, 'visibility': 0.9} if i == 12 else
+        {'x': 0.5, 'y': 0.8, 'z': 0.0, 'visibility': 0.9} if i == 23 else
+        {'x': 0.5, 'y': 0.8, 'z': 0.0, 'visibility': 0.9} if i == 24 else
+        {'x': 0.5, 'y': 0.5, 'z': 0.0, 'visibility': 0.9}
+        for i in range(33)
+    ]
+    image_shape = (1000, 1000, 3)
+    pixel_height = 800.0
+    user_height_cm = 170.0
+
+    # At shoulder level (y_ratio=0.0), width should be 0.4 * 1000 * 170/800 = 85 cm
+    width = measure_width_cm_at_y(landmarks, image_shape, pixel_height, user_height_cm, 0.0)
+    assert 80 < width < 90, f"Expected ~85 cm, got {width}"
+
+
+def test_measure_depth_cm_at_y_basic():
+    """Test depth measurement at shoulder level for profile view."""
+    from app.services.measurement import measure_depth_cm_at_y
+
+    # Left view: shoulders close together (small delta_x), this is depth
+    landmarks = [
+        {'x': 0.5, 'y': 0.3, 'z': 0.0, 'visibility': 0.9} if i == 0 else
+        {'x': 0.48, 'y': 0.3, 'z': 0.0, 'visibility': 0.9} if i == 11 else
+        {'x': 0.52, 'y': 0.3, 'z': 0.0, 'visibility': 0.9} if i == 12 else
+        {'x': 0.5, 'y': 0.8, 'z': 0.0, 'visibility': 0.9} if i == 23 else
+        {'x': 0.5, 'y': 0.8, 'z': 0.0, 'visibility': 0.9} if i == 24 else
+        {'x': 0.5, 'y': 0.5, 'z': 0.0, 'visibility': 0.9}
+        for i in range(33)
+    ]
+    image_shape = (1000, 1000, 3)
+    pixel_height = 800.0
+    user_height_cm = 170.0
+
+    # At shoulder level (y_ratio=0.0), horizontal extent is small (0.04 * 1000 * 170/800 = 8.5 cm)
+    # This represents depth in a profile view
+    depth = measure_depth_cm_at_y(landmarks, image_shape, pixel_height, user_height_cm, 0.0)
+    assert 5 < depth < 15, f"Expected ~8.5 cm, got {depth}"
+
+
+# Tests for Ramanujan ellipse perimeter
+def test_ramanujan_ellipse_perimeter_circle():
+    """Circle: width == depth should give circumference of 2*pi*r."""
+    import math
+    from app.services.measurement import ramanujan_ellipse_perimeter
+
+    # Circle: width == depth = 20 (diameter = 20, radius = 10)
+    perimeter = ramanujan_ellipse_perimeter(20.0, 20.0)
+    expected = 2 * math.pi * 10.0  # 62.8319...
+    assert abs(perimeter - expected) < 0.1, f"Expected ~{expected}, got {perimeter}"
+
+
+def test_ramanujan_ellipse_perimeter_ellipse():
+    """Test ellipse with typical torso ratio ~0.7."""
+    import math
+    from app.services.measurement import ramanujan_ellipse_perimeter
+
+    # Ellipse: width=40, depth=28 (typical torso ratio ~0.7)
+    # Ramanujan's approx: C = pi * (3(a+b) - sqrt((3a+b)(a+3b)))
+    # a=20, b=14 => term1=102, term2=67.77, perimeter=107.65
+    perimeter = ramanujan_ellipse_perimeter(40.0, 28.0)
+    assert 105 < perimeter < 110, f"Expected ~107 cm, got {perimeter}"
+
+
+def test_ramanujan_ellipse_perimeter_invalid():
+    """Invalid inputs should return 0."""
+    from app.services.measurement import ramanujan_ellipse_perimeter
+
+    assert ramanujan_ellipse_perimeter(0, 10) == 0.0
+    assert ramanujan_ellipse_perimeter(10, 0) == 0.0
+    assert ramanujan_ellipse_perimeter(-5, 10) == 0.0
+
+
+# Tests for y-ratio search functions
+def test_find_waist_y_ratio():
+    """Test finding waist y-ratio with minimum width search."""
+    from app.services.measurement import find_waist_y_ratio
+
+    # Create test landmarks with known structure
+    # Shoulders at y=0.3, hips at y=0.8, waist should be found in 0.40-0.70 range
+    landmarks = [
+        {'x': 0.5, 'y': 0.3, 'z': 0.0, 'visibility': 0.9} if i == 0 else
+        {'x': 0.3, 'y': 0.3, 'z': 0.0, 'visibility': 0.9} if i == 11 else
+        {'x': 0.7, 'y': 0.3, 'z': 0.0, 'visibility': 0.9} if i == 12 else
+        {'x': 0.5, 'y': 0.8, 'z': 0.0, 'visibility': 0.9} if i == 23 else
+        {'x': 0.5, 'y': 0.8, 'z': 0.0, 'visibility': 0.9} if i == 24 else
+        {'x': 0.5, 'y': 0.5, 'z': 0.0, 'visibility': 0.9}
+        for i in range(33)
+    ]
+    pixel_height = 800.0
+
+    waist_y = find_waist_y_ratio(landmarks, pixel_height)
+    # Should find minimum width in range 0.40-0.70
+    assert 0.40 <= waist_y <= 0.70, f"Expected waist_y in [0.40, 0.70], got {waist_y}"
+
+
+def test_find_waist_y_ratio_fallback():
+    """Test fallback when landmarks are invalid."""
+    from app.services.measurement import find_waist_y_ratio, WAIST_LINE_RATIO
+
+    # Empty landmarks should return default
+    result = find_waist_y_ratio([], 800.0)
+    assert result == WAIST_LINE_RATIO
+
+
+def test_find_hip_y_ratio():
+    """Test finding hip y-ratio with maximum width search."""
+    from app.services.measurement import find_hip_y_ratio
+
+    landmarks = [
+        {'x': 0.5, 'y': 0.3, 'z': 0.0, 'visibility': 0.9} if i == 0 else
+        {'x': 0.3, 'y': 0.3, 'z': 0.0, 'visibility': 0.9} if i == 11 else
+        {'x': 0.7, 'y': 0.3, 'z': 0.0, 'visibility': 0.9} if i == 12 else
+        {'x': 0.45, 'y': 0.65, 'z': 0.0, 'visibility': 0.9} if i == 23 else  # hip at y=0.65
+        {'x': 0.55, 'y': 0.65, 'z': 0.0, 'visibility': 0.9} if i == 24 else
+        {'x': 0.5, 'y': 0.5, 'z': 0.0, 'visibility': 0.9}
+        for i in range(33)
+    ]
+    pixel_height = 800.0
+
+    hip_y = find_hip_y_ratio(landmarks, pixel_height)
+    # Should be near or below hip landmarks
+    assert 0.60 < hip_y <= 0.80, f"Expected hip_y in (0.60, 0.80], got {hip_y}"
+
+
+def test_find_chest_y_ratio():
+    """Test finding chest y-ratio with maximum width search in upper torso."""
+    from app.services.measurement import find_chest_y_ratio
+
+    # Create landmarks where shoulders are wider than waist (typical torso)
+    # Shoulders at y=0.3 with x=0.2 to 0.8 (width=0.6)
+    # Waist at y=0.55 with x=0.4 to 0.6 (width=0.2)
+    # Chest should be found somewhere between shoulders and waist
+    landmarks = [
+        {'x': 0.5, 'y': 0.3, 'z': 0.0, 'visibility': 0.9} if i == 0 else
+        {'x': 0.2, 'y': 0.3, 'z': 0.0, 'visibility': 0.9} if i == 11 else  # left_shoulder wider
+        {'x': 0.8, 'y': 0.3, 'z': 0.0, 'visibility': 0.9} if i == 12 else  # right_shoulder wider
+        {'x': 0.5, 'y': 0.8, 'z': 0.0, 'visibility': 0.9} if i == 23 else
+        {'x': 0.5, 'y': 0.8, 'z': 0.0, 'visibility': 0.9} if i == 24 else
+        {'x': 0.5, 'y': 0.5, 'z': 0.0, 'visibility': 0.9}
+        for i in range(33)
+    ]
+    pixel_height = 800.0
+    waist_y = 0.55
+
+    chest_y = find_chest_y_ratio(landmarks, pixel_height, waist_y)
+    # Should be above waist, and likely around shoulders (y=0.3)
+    assert 0.0 < chest_y <= 0.55, f"Expected chest_y in (0, 0.55], got {chest_y}"
+
+
+# Tests for fuse_multiview_circumference
+def test_fuse_multiview_circumference_full_4view():
+    """Test fusion with all 4 views."""
+    from app.services.measurement import fuse_multiview_circumference, classify_view
+
+    # Create 4 views
+    front_landmarks = [
+        {'x': 0.5, 'y': 0.3, 'z': 0.0, 'visibility': 0.9} if i == 0 else
+        {'x': 0.3, 'y': 0.3, 'z': 0.0, 'visibility': 0.9} if i == 11 else
+        {'x': 0.7, 'y': 0.3, 'z': 0.0, 'visibility': 0.9} if i == 12 else
+        {'x': 0.3, 'y': 0.25, 'z': 0.0, 'visibility': 0.9} if i == 1 else
+        {'x': 0.7, 'y': 0.25, 'z': 0.0, 'visibility': 0.9} if i == 2 else
+        {'x': 0.4, 'y': 0.6, 'z': 0.0, 'visibility': 0.9} if i == 23 else  # narrower at waist
+        {'x': 0.6, 'y': 0.6, 'z': 0.0, 'visibility': 0.9} if i == 24 else
+        {'x': 0.5, 'y': 0.8, 'z': 0.0, 'visibility': 0.9} if i == 25 else
+        {'x': 0.5, 'y': 0.5, 'z': 0.0, 'visibility': 0.9}
+        for i in range(33)
+    ]
+
+    back_landmarks = [
+        {'x': 0.5, 'y': 0.3, 'z': -0.1, 'visibility': 0.9} if i == 0 else
+        {'x': 0.3, 'y': 0.3, 'z': 0.0, 'visibility': 0.9} if i == 11 else
+        {'x': 0.7, 'y': 0.3, 'z': 0.0, 'visibility': 0.9} if i == 12 else
+        {'x': 0.3, 'y': 0.25, 'z': 0.0, 'visibility': 0.9} if i == 1 else
+        {'x': 0.7, 'y': 0.25, 'z': 0.0, 'visibility': 0.6} if i == 2 else
+        {'x': 0.4, 'y': 0.6, 'z': 0.0, 'visibility': 0.9} if i == 23 else
+        {'x': 0.6, 'y': 0.6, 'z': 0.0, 'visibility': 0.9} if i == 24 else
+        {'x': 0.5, 'y': 0.8, 'z': 0.0, 'visibility': 0.9} if i == 25 else
+        {'x': 0.5, 'y': 0.5, 'z': 0.0, 'visibility': 0.9}
+        for i in range(33)
+    ]
+
+    left_landmarks = [
+        {'x': 0.6, 'y': 0.3, 'z': 0.0, 'visibility': 0.9} if i == 0 else  # nose on right
+        {'x': 0.48, 'y': 0.3, 'z': 0.0, 'visibility': 0.9} if i == 11 else
+        {'x': 0.52, 'y': 0.3, 'z': 0.0, 'visibility': 0.9} if i == 12 else
+        {'x': 0.5, 'y': 0.6, 'z': 0.0, 'visibility': 0.9} if i == 23 else
+        {'x': 0.5, 'y': 0.6, 'z': 0.0, 'visibility': 0.9} if i == 24 else
+        {'x': 0.5, 'y': 0.8, 'z': 0.0, 'visibility': 0.9} if i == 25 else
+        {'x': 0.5, 'y': 0.5, 'z': 0.0, 'visibility': 0.9}
+        for i in range(33)
+    ]
+
+    right_landmarks = [
+        {'x': 0.4, 'y': 0.3, 'z': 0.0, 'visibility': 0.9} if i == 0 else  # nose on left
+        {'x': 0.48, 'y': 0.3, 'z': 0.0, 'visibility': 0.9} if i == 11 else
+        {'x': 0.52, 'y': 0.3, 'z': 0.0, 'visibility': 0.9} if i == 12 else
+        {'x': 0.5, 'y': 0.6, 'z': 0.0, 'visibility': 0.9} if i == 23 else
+        {'x': 0.5, 'y': 0.6, 'z': 0.0, 'visibility': 0.9} if i == 24 else
+        {'x': 0.5, 'y': 0.8, 'z': 0.0, 'visibility': 0.9} if i == 25 else
+        {'x': 0.5, 'y': 0.5, 'z': 0.0, 'visibility': 0.9}
+        for i in range(33)
+    ]
+
+    views = {
+        'front': {'landmarks': front_landmarks, 'image_shape': (800, 800, 3), 'pixel_height': 700},
+        'back': {'landmarks': back_landmarks, 'image_shape': (800, 800, 3), 'pixel_height': 700},
+        'left': {'landmarks': left_landmarks, 'image_shape': (800, 800, 3), 'pixel_height': 700},
+        'right': {'landmarks': right_landmarks, 'image_shape': (800, 800, 3), 'pixel_height': 700}
+    }
+
+    result = fuse_multiview_circumference(views, user_height_cm=165.0)
+    assert result['waist'] > 0, f"Expected waist > 0, got {result['waist']}"
+    assert result['hips'] > 0, f"Expected hips > 0, got {result['hips']}"
+    assert result['chest'] > 0, f"Expected chest > 0, got {result['chest']}"
+    assert result['confidence'] >= 0.9, f"Expected confidence >= 0.9, got {result['confidence']}"
+
+
+def test_fuse_multiview_circumference_2view_fallback():
+    """Test fusion with only front and back views."""
+    from app.services.measurement import fuse_multiview_circumference
+
+    front_landmarks = [
+        {'x': 0.5, 'y': 0.3, 'z': 0.0, 'visibility': 0.9} if i == 0 else
+        {'x': 0.3, 'y': 0.3, 'z': 0.0, 'visibility': 0.9} if i == 11 else
+        {'x': 0.7, 'y': 0.3, 'z': 0.0, 'visibility': 0.9} if i == 12 else
+        {'x': 0.3, 'y': 0.25, 'z': 0.0, 'visibility': 0.9} if i == 1 else
+        {'x': 0.7, 'y': 0.25, 'z': 0.0, 'visibility': 0.9} if i == 2 else
+        {'x': 0.4, 'y': 0.6, 'z': 0.0, 'visibility': 0.9} if i == 23 else
+        {'x': 0.6, 'y': 0.6, 'z': 0.0, 'visibility': 0.9} if i == 24 else
+        {'x': 0.5, 'y': 0.8, 'z': 0.0, 'visibility': 0.9} if i == 25 else
+        {'x': 0.5, 'y': 0.5, 'z': 0.0, 'visibility': 0.9}
+        for i in range(33)
+    ]
+
+    back_landmarks = [
+        {'x': 0.5, 'y': 0.3, 'z': -0.1, 'visibility': 0.9} if i == 0 else
+        {'x': 0.3, 'y': 0.3, 'z': 0.0, 'visibility': 0.9} if i == 11 else
+        {'x': 0.7, 'y': 0.3, 'z': 0.0, 'visibility': 0.9} if i == 12 else
+        {'x': 0.3, 'y': 0.25, 'z': 0.0, 'visibility': 0.9} if i == 1 else
+        {'x': 0.7, 'y': 0.25, 'z': 0.0, 'visibility': 0.6} if i == 2 else
+        {'x': 0.4, 'y': 0.6, 'z': 0.0, 'visibility': 0.9} if i == 23 else
+        {'x': 0.6, 'y': 0.6, 'z': 0.0, 'visibility': 0.9} if i == 24 else
+        {'x': 0.5, 'y': 0.8, 'z': 0.0, 'visibility': 0.9} if i == 25 else
+        {'x': 0.5, 'y': 0.5, 'z': 0.0, 'visibility': 0.9}
+        for i in range(33)
+    ]
+
+    views = {
+        'front': {'landmarks': front_landmarks, 'image_shape': (800, 800, 3), 'pixel_height': 700},
+        'back': {'landmarks': back_landmarks, 'image_shape': (800, 800, 3), 'pixel_height': 700}
+    }
+
+    result = fuse_multiview_circumference(views, user_height_cm=165.0)
+    assert result['waist'] > 0, f"Expected waist > 0, got {result['waist']}"
+    # With only 2 views, confidence should be penalized
+    assert result['confidence'] < 0.9, f"Expected confidence < 0.9 for 2 views, got {result['confidence']}"
+
+
+def test_fuse_multiview_circumference_1view_fallback():
+    """Test fusion with only front view - should use fallback factors."""
+    from app.services.measurement import fuse_multiview_circumference
+
+    front_landmarks = [
+        {'x': 0.5, 'y': 0.3, 'z': 0.0, 'visibility': 0.9} if i == 0 else
+        {'x': 0.3, 'y': 0.3, 'z': 0.0, 'visibility': 0.9} if i == 11 else
+        {'x': 0.7, 'y': 0.3, 'z': 0.0, 'visibility': 0.9} if i == 12 else
+        {'x': 0.3, 'y': 0.25, 'z': 0.0, 'visibility': 0.9} if i == 1 else
+        {'x': 0.7, 'y': 0.25, 'z': 0.0, 'visibility': 0.9} if i == 2 else
+        {'x': 0.4, 'y': 0.6, 'z': 0.0, 'visibility': 0.9} if i == 23 else
+        {'x': 0.6, 'y': 0.6, 'z': 0.0, 'visibility': 0.9} if i == 24 else
+        {'x': 0.5, 'y': 0.8, 'z': 0.0, 'visibility': 0.9} if i == 25 else
+        {'x': 0.5, 'y': 0.5, 'z': 0.0, 'visibility': 0.9}
+        for i in range(33)
+    ]
+
+    views = {
+        'front': {'landmarks': front_landmarks, 'image_shape': (800, 800, 3), 'pixel_height': 700}
+    }
+
+    result = fuse_multiview_circumference(views, user_height_cm=165.0)
+    assert result['waist'] > 0, f"Expected waist > 0, got {result['waist']}"
+    # Heavy penalty for single view
+    assert result['confidence'] <= 0.70, f"Expected confidence <= 0.70 for single view, got {result['confidence']}"
+
+
+def test_fuse_multiview_circumference_empty():
+    """Test fusion with empty views dict."""
+    from app.services.measurement import fuse_multiview_circumference
+
+    result = fuse_multiview_circumference({}, user_height_cm=165.0)
+    assert result['waist'] == 0.0
+    assert result['hips'] == 0.0
+    assert result['chest'] == 0.0
+    assert result['confidence'] == 0.0

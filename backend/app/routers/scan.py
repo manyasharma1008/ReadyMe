@@ -20,6 +20,8 @@ from app.services.measurement import (
     calculate_measurements_calibrated,
     get_calibration_system,
     fuse_measurements,
+    calculate_fill_ratio,
+    classify_framing,
     DEFAULT_USER_HEIGHT_CM
 )
 from app.services.visualization import create_visualization
@@ -767,14 +769,16 @@ async def measure_multiple_images(payload: MeasureMultipleRequest):
         primary_warnings = []
 
         # Compute confidence levels from consistency check
+        # Convert string levels to float values for API response
         consistency = fusion_debug.get('consistency', {})
-        confidence_level = MeasurementConfidenceLevel(
-            height=consistency.get('height', 'medium'),
-            chest=consistency.get('chest', 'medium'),
-            waist=consistency.get('waist', 'medium'),
-            hips=consistency.get('hips', 'medium'),
-            shoulders=consistency.get('shoulder_width', 'medium')
-        )
+        level_to_float = {'high': 0.9, 'medium': 0.6, 'low': 0.3}
+        confidence_level = {
+            'height': level_to_float.get(consistency.get('height', 'medium'), 0.6),
+            'chest': level_to_float.get(consistency.get('chest', 'medium'), 0.6),
+            'waist': level_to_float.get(consistency.get('waist', 'medium'), 0.6),
+            'hips': level_to_float.get(consistency.get('hips', 'medium'), 0.6),
+            'shoulder_width': level_to_float.get(consistency.get('shoulder_width', 'medium'), 0.6)
+        }
 
         if front_enhanced:
             primary_scan_type = front_enhanced.get('scan_type', 'full_body')
@@ -815,3 +819,43 @@ async def measure_multiple_images(payload: MeasureMultipleRequest):
             confidence=None,
             warnings=[f"Error processing images: {str(e)}"]
         )
+
+
+# ========== Framing Guidance Endpoint ==========
+
+@router.post("/framing/check")
+async def check_framing(frame: UploadFile = File(...)):
+    """
+    Real-time framing check. Returns fill_ratio and a user-facing status.
+    Designed for low-latency per-frame polling (~5 fps from client).
+    """
+    try:
+        contents = await frame.read()
+        arr = np.frombuffer(contents, np.uint8)
+        image = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+        if image is None:
+            raise HTTPException(400, "Invalid image")
+
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        processed = preprocess_image(image)
+        landmarks_data = extract_body_landmarks(processed)
+
+        if not landmarks_data or 'landmarks' not in landmarks_data:
+            return {
+                'status': 'invalid',
+                'message': 'No body detected — stand in full view',
+                'fill_ratio': 0.0,
+            }
+
+        fill_info = calculate_fill_ratio(landmarks_data['landmarks'], processed.shape)
+        return classify_framing(fill_info)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Framing check error: {e}")
+        return {
+            'status': 'invalid',
+            'message': f'Error processing frame: {str(e)}',
+            'fill_ratio': 0.0,
+        }
