@@ -40,7 +40,8 @@ async def predict_size(request: SizePredictionRequest):
             size_chart=request.size_chart,
             use_standard_chart=request.use_standard_chart,
             category=category,
-            gender=gender
+            gender=gender,
+            measurement_confidence=request.confidence
         )
 
         return result

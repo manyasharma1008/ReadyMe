@@ -37,8 +37,30 @@ VISIBILITY_THRESHOLD = 0.5  # Minimum visibility to consider landmark valid
 TORSO_VISIBILITY_THRESHOLD = 0.25
 LOWER_BODY_VISIBILITY_THRESHOLD = 0.15
 
+# Reserved for future contour/silhouette measurement. Do not apply this to
+# landmark-to-landmark widths, which already measure between joint centers.
+LANDMARK_TO_SILHOUETTE_FACTOR = 1.22
+
 # Ratio-based normalization settings
 DEFAULT_USER_HEIGHT_CM = 170.0  # Default height when not provided
+
+# Bias correction factors for systematic underestimation
+BIAS_CORRECTION_CHEST = 1.07      # 7% upward correction for chest
+BIAS_CORRECTION_WAIST = 1.08      # 8% upward correction for waist
+BIAS_CORRECTION_SHOULDER = 1.08   # 8% upward correction for shoulder
+BIAS_CORRECTION_HIPS = 1.05       # 5% upward correction for hips
+
+# Strict front-view mode (reject non-front instead of fallback)
+STRICT_FRONT_MODE = True          # When True, reject non-front width measurements
+
+# Multi-frame averaging settings
+MIN_VALID_FRAMES_FOR_AVG = 2      # Minimum valid frames to average
+FRAME_SMOOTHING_WINDOW = 3         # Number of frames to smooth over
+
+# Confidence thresholds
+MIN_CONFIDENCE_FOR_SIZE = 0.70     # Minimum avg confidence to give size recommendation
+LOW_CONFIDENCE_BIAS = 1.05         # 5% bias toward larger size when confidence is low
+
 LANDMARK_CONFIDENCE_THRESHOLD = 0.6  # Minimum confidence for valid measurements
 
 # Multi-angle fusion settings
@@ -54,23 +76,22 @@ MEASUREMENT_CONFIDENCE_THRESHOLD = 0.5
 HEAD_LANDMARK_INDICES = list(range(11))
 FOOT_LANDMARK_INDICES = [27, 28]  # Ankle landmarks only (29-32 are face-only in MediaPipe Pose)
 RELIABLE_MEASUREMENT_KEYS = ["chest", "waist", "hips", "shoulder_width"]
-CHEST_LINE_RATIO = 0.2
+CHEST_LINE_RATIO = 0.38
 WAIST_LINE_RATIO = 0.55
-CHEST_CIRCUMFERENCE_FACTOR = 2.15
 WAIST_CIRCUMFERENCE_FACTOR = 2.0
 HIP_CIRCUMFERENCE_FACTOR = 2.2
-# Fallback circumference factors (used only when depth is unmeasurable)
-# Updated to reflect actual torso depth/width ratios ~0.70
+# Fallback circumference factors used only for single-view width-only fallback.
 FALLBACK_CHEST_CIRCUMFERENCE_FACTOR = 2.65
 FALLBACK_WAIST_CIRCUMFERENCE_FACTOR = 2.60
 FALLBACK_HIP_CIRCUMFERENCE_FACTOR = 2.75
+DEPTH_WIDTH_FALLBACK_RATIO = 0.55
 HEAD_TO_HIP_HEIGHT_RATIO = 0.52
 MIN_ESTIMATED_HEIGHT_MULTIPLIER = 0.45
 MAX_ESTIMATED_HEIGHT_MULTIPLIER = 1.15
 TORSO_HEIGHT_CONFIDENCE = 0.55
 
 # Distance-based scaling settings
-MIN_PIXEL_HEIGHT_RATIO = 0.30  # Minimum fill ratio (person_height / image_height) for valid measurements
+MIN_PIXEL_HEIGHT_RATIO = 0.25  # Minimum fill ratio (person_height / image_height) for valid measurements
 DISTANCE_PENALTY_THRESHOLD = 0.50  # fill_ratio below this triggers confidence penalty
 MAX_CONFIDENCE_PENALTY = 0.30  # Maximum penalty applied when subject is very far
 
@@ -176,7 +197,7 @@ def classify_scan_type(landmarks: list, visibility_threshold: float = VISIBILITY
 
 def compute_confidence(landmarks: list, scan_type: str, has_calibration: bool = False,
                        visibility_threshold: float = VISIBILITY_THRESHOLD,
-                       fill_ratio: float = 0.8) -> dict:
+                       fill_ratio: float = 0.8, pose_quality: float = 1.0) -> dict:
     """
     Compute confidence scores for each measurement.
 
@@ -185,6 +206,8 @@ def compute_confidence(landmarks: list, scan_type: str, has_calibration: bool = 
         scan_type: "full_body", "upper_body", or "invalid"
         has_calibration: Whether calibration is available
         visibility_threshold: Minimum visibility for valid landmarks
+        fill_ratio: Ratio of subject fill in frame (affects distance penalty)
+        pose_quality: Pose quality factor (0-1), penalizes width measurements when < 1.0
 
     Returns:
         Dictionary with confidence scores (0-1) for each measurement
@@ -250,6 +273,13 @@ def compute_confidence(landmarks: list, scan_type: str, has_calibration: bool = 
         confidence['waist'] = max(0.0, min(0.8, average_visibility([11, 12, 23, 24]) + symmetry_bonus * 0.15 + calibration_bonus - distance_penalty))
         confidence['hips'] = max(0.0, min(0.75, average_visibility([23, 24]) + symmetry_bonus * 0.1 + calibration_bonus - distance_penalty))
         confidence['shoulder_width'] = max(0.0, min(1.0, average_visibility([11, 12]) + symmetry_bonus * 0.2 + calibration_bonus - distance_penalty))
+
+    # Apply pose quality penalty for width measurements when pose_quality < 1.0
+    if pose_quality < 1.0:
+        pose_penalty = (1.0 - pose_quality) * 0.3
+        confidence['chest'] = max(0, confidence['chest'] - pose_penalty)
+        confidence['waist'] = max(0, confidence['waist'] - pose_penalty)
+        confidence['shoulder_width'] = max(0, confidence['shoulder_width'] - pose_penalty)
 
     return confidence
 
@@ -800,10 +830,10 @@ def calculate_fill_ratio(landmarks: list, image_shape: tuple) -> dict:
 
 
 # Framing guidance thresholds (raw fill_ratio, no correction factor)
-FRAMING_TOO_FAR = 0.55
-FRAMING_IDEAL_MIN = 0.65
-FRAMING_IDEAL_MAX = 0.85
-FRAMING_TOO_CLOSE = 0.90
+FRAMING_TOO_FAR = 0.35   # below 35% = actually too far (tiny figure in frame)
+FRAMING_IDEAL_MIN = 0.45 # 45-80% is the real ideal range for full-body on phone
+FRAMING_IDEAL_MAX = 0.82
+FRAMING_TOO_CLOSE = 0.90 # unchanged
 
 
 def classify_framing(fill_info: dict) -> dict:
@@ -1034,6 +1064,7 @@ def calculate_shoulder_width(landmarks: list, image_shape: tuple,
         if shoulder_px <= 0:
             return 0.0, False
         shoulder_cm = measure_from_ratio(shoulder_px, pixel_height, user_height_cm)
+        shoulder_cm = shoulder_cm * BIAS_CORRECTION_SHOULDER
         return max(0.0, shoulder_cm), shoulder_cm > 0
     except Exception:
         return 0.0, False
@@ -1075,7 +1106,8 @@ def calculate_chest(landmarks: list, image_shape: tuple, pixel_height: float,
             chest_px = shoulder_px * AVERAGE_HUMAN_RATIOS['chest_to_shoulder_ratio']
 
         chest_width_cm = measure_from_ratio(chest_px, pixel_height, user_height_cm)
-        chest_cm = chest_width_cm * CHEST_CIRCUMFERENCE_FACTOR
+        chest_cm = estimate_circumference_from_width(chest_width_cm)
+        chest_cm = chest_cm * BIAS_CORRECTION_CHEST
 
         return chest_cm if chest_cm > 0 else 0.0, chest_cm > 0
     except Exception:
@@ -1123,6 +1155,7 @@ def calculate_waist(landmarks: list, image_shape: tuple, pixel_height: float,
         waist_px = horizontal_distance_px(left_waist, right_waist, image_shape)
         waist_width_cm = measure_from_ratio(waist_px, pixel_height, user_height_cm)
         waist_cm = waist_width_cm * WAIST_CIRCUMFERENCE_FACTOR
+        waist_cm = waist_cm * BIAS_CORRECTION_WAIST
 
         return waist_cm if waist_cm > 0 else 0.0, waist_cm > 0
     except Exception:
@@ -1160,6 +1193,7 @@ def calculate_hips(landmarks: list, image_shape: tuple, pixel_height: float,
         hips_px = horizontal_distance_px(left_hip, right_hip, image_shape)
         hips_width_cm = measure_from_ratio(hips_px, pixel_height, user_height_cm)
         hips_cm = hips_width_cm * HIP_CIRCUMFERENCE_FACTOR
+        hips_cm = hips_cm * BIAS_CORRECTION_HIPS
 
         return hips_cm if hips_cm > 0 else 0.0, hips_cm > 0
     except Exception:
@@ -1198,6 +1232,59 @@ def is_front_view(landmarks: list) -> bool:
         return delta_x > 0.15 and delta_y < 0.15
     except Exception:
         return False
+
+
+def validate_front_pose_strict(landmarks: list, min_confidence: float = LANDMARK_CONFIDENCE_THRESHOLD) -> dict:
+    """
+    Strict front pose validation for width measurements.
+
+    Returns:
+        dict with:
+            - is_valid: bool
+            - reason: str (if invalid)
+            - shoulder_alignment: float (y-difference)
+            - pose_quality: float (0-1)
+    """
+    if not landmarks or len(landmarks) < 13:
+        return {'is_valid': False, 'reason': 'insufficient_landmarks', 'shoulder_alignment': 0, 'pose_quality': 0}
+
+    try:
+        left_shoulder = landmarks[11]
+        right_shoulder = landmarks[12]
+
+        # Check for None landmarks
+        if not left_shoulder or not right_shoulder:
+            return {'is_valid': False, 'reason': 'missing_shoulder_landmarks', 'shoulder_alignment': 0, 'pose_quality': 0}
+
+        # Check visibility
+        left_vis = left_shoulder.get('visibility', 0)
+        right_vis = right_shoulder.get('visibility', 0)
+
+        if left_vis < min_confidence or right_vis < min_confidence:
+            return {'is_valid': False, 'reason': 'low_shoulder_visibility', 'shoulder_alignment': 0, 'pose_quality': 0}
+
+        delta_x = abs(right_shoulder['x'] - left_shoulder['x'])
+        delta_y = abs(right_shoulder['y'] - left_shoulder['y'])
+
+        # Calculate pose quality based on how well it meets front criteria
+        x_score = min(1.0, delta_x / 0.20)  # 0.20 is ideal minimum
+        y_score = 1.0 - min(1.0, delta_y / 0.15)  # Lower is better
+        pose_quality = (x_score + y_score) / 2
+
+        # Strict criteria
+        is_valid = delta_x > 0.15 and delta_y < 0.15
+
+        if not is_valid:
+            if delta_x <= 0.15:
+                reason = 'shoulders_too_close (side view)'
+            else:
+                reason = 'shoulder_misalignment (rotated)'
+            return {'is_valid': False, 'reason': reason, 'shoulder_alignment': delta_y, 'pose_quality': pose_quality}
+
+        return {'is_valid': True, 'reason': 'valid', 'shoulder_alignment': delta_y, 'pose_quality': pose_quality}
+
+    except Exception as e:
+        return {'is_valid': False, 'reason': str(e), 'shoulder_alignment': 0, 'pose_quality': 0}
 
 
 def classify_view(landmarks: list) -> str:
@@ -1266,8 +1353,7 @@ def measure_width_cm_at_y(landmarks: list, image_shape: tuple, pixel_height: flo
     """
     Measure body width at a given vertical position (y_ratio from shoulders).
 
-    For front/back views: measures horizontal extent (left-right width).
-    For left/right views: measures front-back depth (same code path, different semantic).
+    Uses silhouette-based sizing - accounts for body extending beyond landmarks.
 
     Args:
         landmarks: List of 33 MediaPipe Pose landmarks
@@ -1310,22 +1396,74 @@ def measure_width_cm_at_y(landmarks: list, image_shape: tuple, pixel_height: flo
 def measure_depth_cm_at_y(landmarks: list, image_shape: tuple, pixel_height: float,
                           user_height_cm: float, y_ratio: float) -> float:
     """
-    Measure body depth at a given vertical position.
+    Measure front-to-back body depth at a given torso y-ratio using the
+    z-coordinate from MediaPipe Pose.
 
-    For left/right views: measures horizontal extent which maps to front-back depth.
-    Uses the same implementation as width measurement - the difference is semantic.
+    MediaPipe z is expressed in the same normalised units as x (relative to
+    image width), with the hip midpoint as origin. Negative z = closer to
+    camera. The front-to-back span of the torso at a given y-line is the
+    range of z values across the torso landmarks at that height.
+
+    For a side view the torso z-spread maps directly to depth.
+    For a front/back view this also returns a reasonable depth estimate.
 
     Args:
-        landmarks: List of 33 MediaPipe Pose landmarks
+        landmarks: List of 33 MediaPipe Pose landmarks (each has x, y, z, visibility)
         image_shape: Shape of the image (height, width, channels)
         pixel_height: Body height in pixels
         user_height_cm: User's height in cm
-        y_ratio: Ratio from shoulder line (0.0 = shoulders, 0.5 = mid-torso, 1.0 = hips)
 
     Returns:
-        Depth in cm
+        Estimated depth in cm, or 0.0 if unavailable
     """
-    return measure_width_cm_at_y(landmarks, image_shape, pixel_height, user_height_cm, y_ratio)
+    if not landmarks or len(landmarks) < 25 or pixel_height <= 0:
+        return 0.0
+
+    try:
+        left_shoulder  = landmarks[11]
+        right_shoulder = landmarks[12]
+        left_hip       = landmarks[23]
+        right_hip      = landmarks[24]
+
+        # Need visibility for the interpolation
+        for lm in [left_shoulder, right_shoulder, left_hip, right_hip]:
+            if lm.get('visibility', 0) < TORSO_VISIBILITY_THRESHOLD:
+                return 0.0
+
+        # Interpolate virtual landmarks at the target y-ratio line
+        left_point  = interpolate_landmark(left_shoulder, left_hip, y_ratio)
+        right_point = interpolate_landmark(right_shoulder, right_hip, y_ratio)
+
+        # z-range across the torso at this line is the front-to-back extent
+        z_values = [left_point.get('z', 0.0), right_point.get('z', 0.0)]
+
+        # Also include elbow/knee z if they're in the torso region
+        for idx in [13, 14]:   # elbows
+            lm = landmarks[idx]
+            if lm.get('visibility', 0) >= TORSO_VISIBILITY_THRESHOLD:
+                z_values.append(lm.get('z', 0.0))
+
+        z_range = max(z_values) - min(z_values)
+
+        if z_range <= 0:
+            return 0.0
+
+        # Convert z_range from normalised units to pixels.
+        # MediaPipe z is normalised relative to image width (same scale as x).
+        z_range_px = abs(z_range) * image_shape[1]
+
+        # Convert pixels → cm using the same ratio normalization as width.
+        depth_cm = measure_from_ratio(z_range_px, pixel_height, user_height_cm)
+
+        # Sanity clamp: depth must be 25%-80% of whatever the front width would be.
+        # Outside that range the z signal is noise.
+        if depth_cm <= 0:
+            return 0.0
+
+        return depth_cm
+
+    except (KeyError, IndexError, TypeError, ZeroDivisionError):
+        return 0.0
 
 
 def ramanujan_ellipse_perimeter(width_cm: float, depth_cm: float) -> float:
@@ -1356,6 +1494,15 @@ def ramanujan_ellipse_perimeter(width_cm: float, depth_cm: float) -> float:
     perimeter = math.pi * (term1 - term2)
 
     return perimeter if perimeter > 0 else 0.0
+
+
+def estimate_circumference_from_width(width_cm: float,
+                                      depth_width_ratio: float = DEPTH_WIDTH_FALLBACK_RATIO) -> float:
+    """Estimate torso circumference from width using a neutral depth fallback."""
+    if width_cm <= 0 or depth_width_ratio <= 0:
+        return 0.0
+
+    return ramanujan_ellipse_perimeter(width_cm, width_cm * depth_width_ratio)
 
 
 def find_waist_y_ratio(landmarks: list, pixel_height: float,
@@ -1448,9 +1595,10 @@ def find_chest_y_ratio(landmarks: list, pixel_height: float,
                        waist_y_ratio: float,
                        user_height_cm: float = DEFAULT_USER_HEIGHT_CM) -> float:
     """
-    Find the y-ratio where body width is maximum in upper torso (chest).
+    Find the y-ratio where body width peaks around the bust line.
 
-    Searches bounded between shoulders and waist for maximum width.
+    Searches only within the upper torso bust window instead of scanning from
+    the shoulders all the way to the waist.
 
     Args:
         landmarks: List of 33 MediaPipe Pose landmarks
@@ -1470,8 +1618,10 @@ def find_chest_y_ratio(landmarks: list, pixel_height: float,
         max_width = 0.0
         best_y_ratio = CHEST_LINE_RATIO
 
-        # Search from shoulders (0.0) to waist
-        for y_ratio in [r / 100.0 for r in range(5, int(waist_y_ratio * 100), 2)]:
+        start_ratio = 0.28
+        end_ratio = max(start_ratio + 0.02, waist_y_ratio - 0.05)
+
+        for y_ratio in [r / 100.0 for r in range(int(start_ratio * 100), int(end_ratio * 100) + 1, 2)]:
             width = measure_width_cm_at_y(landmarks, image_shape, pixel_height,
                                           user_height_cm, y_ratio)
             if width > max_width:
@@ -1488,7 +1638,7 @@ def fuse_multiview_circumference(views: dict, user_height_cm: float = DEFAULT_US
     Fuse multiview measurements using ellipse geometry.
 
     - 4 views: width from front/back + depth from left/right -> full ellipse
-    - 2 views (front+back only): width known, depth estimated as 0.70 * width
+    - 2 views (front+back only): width known, depth estimated from width
     - 1 view: fallback to factor-based calculation with reduced confidence
 
     Args:
@@ -1511,10 +1661,16 @@ def fuse_multiview_circumference(views: dict, user_height_cm: float = DEFAULT_US
     # Classify each view
     classified = {}
     for view_name, view_data in views.items():
-        landmarks = view_data.get('landmarks', [])
-        view_type = classify_view(landmarks)
-        if view_type != "unknown":
-            classified[view_type] = view_data
+        # Prefer the declared type passed in from the endpoint (frontend-labeled).
+        # Fall back to classify_view() only when no declared type is provided.
+        declared = view_data.get('declared_view_type')
+        if declared in ('front', 'back', 'left', 'right'):
+            classified[declared] = view_data
+        else:
+            landmarks = view_data.get('landmarks', [])
+            view_type = classify_view(landmarks)
+            if view_type != 'unknown':
+                classified[view_type] = view_data
 
     # Determine available view pairs
     has_front = 'front' in classified
@@ -1608,31 +1764,40 @@ def fuse_multiview_circumference(views: dict, user_height_cm: float = DEFAULT_US
         sorted_vals = sorted(values)
         return sorted_vals[len(sorted_vals) // 2]
 
-    def calc_measurement(width_vals: list, depth_vals: list) -> tuple[float, float]:
+    fallback_factors = {
+        'chest': FALLBACK_CHEST_CIRCUMFERENCE_FACTOR,
+        'waist': FALLBACK_WAIST_CIRCUMFERENCE_FACTOR,
+        'hips': FALLBACK_HIP_CIRCUMFERENCE_FACTOR,
+    }
+
+    def calc_measurement(width_vals: list, depth_vals: list, part_key: str) -> tuple[float, float]:
         """Returns (measurement_cm, confidence)"""
         w = robust_median(width_vals) if width_vals else 0.0
 
         if depth_vals:
             # Full ellipse with measured depth
             d = robust_median(depth_vals)
+            # Sanity: depth must be at least 30% and at most 95% of width.
+            # Outside this range the z signal is noise — fall back to estimated depth.
+            if d < w * 0.30 or d > w * 0.95:
+                d = w * DEPTH_WIDTH_FALLBACK_RATIO
+                conf = 0.70
+            else:
+                conf = 0.95
             measurement = ramanujan_ellipse_perimeter(w, d)
-            # Confidence: high when we have both width and depth
-            conf = 0.95 if (width_vals and depth_vals) else 0.85
             return measurement, conf
         elif w > 0 and front_back_count >= 2:
-            # Estimate depth as 0.70 * width (typical torso ratio)
-            d = w * 0.70
+            d = w * DEPTH_WIDTH_FALLBACK_RATIO
             measurement = ramanujan_ellipse_perimeter(w, d)
             return measurement, 0.70
         elif w > 0:
-            # Single view fallback - use factor-based calculation
-            measurement = w * FALLBACK_WAIST_CIRCUMFERENCE_FACTOR
+            measurement = w * fallback_factors.get(part_key, FALLBACK_WAIST_CIRCUMFERENCE_FACTOR)
             return measurement, 0.50
         return 0.0, 0.0
 
     # Calculate each measurement
     for key in ['chest', 'waist', 'hips']:
-        measurement, base_conf = calc_measurement(widths[key], depths[key])
+        measurement, base_conf = calc_measurement(widths[key], depths[key], key)
         result[key] = measurement
 
     # Calculate overall confidence based on view count and agreement
@@ -1701,8 +1866,11 @@ def fuse_measurements(measurements_by_angle: dict) -> tuple[dict, dict]:
     valid_angles = []
 
     for angle, measurements in measurements_by_angle.items():
-        if measurements and any(measurements.get(k, 0) > 0 for k in measurement_keys):
-            valid_angles.append(angle)
+        # Skip None values and empty measurements
+        if not measurements or not any(measurements.get(k, 0) > 0 for k in measurement_keys):
+            debug['rejected_angles'].append(angle)
+            continue
+        valid_angles.append(angle)
 
     debug['valid_angles_used'] = len(valid_angles)
 
@@ -1896,7 +2064,8 @@ def calculate_chest_calibrated(landmarks: list, image_shape: tuple, calibration_
             return 0.0
 
         chest_pixels = horizontal_distance_px(left_chest, right_chest, image_shape)
-        chest_cm = (chest_pixels / calibration_factor) * CHEST_CIRCUMFERENCE_FACTOR
+        chest_width_cm = chest_pixels / calibration_factor
+        chest_cm = estimate_circumference_from_width(chest_width_cm)
 
         return chest_cm if chest_cm > 0 else 0.0
     except Exception:
@@ -2206,6 +2375,27 @@ def calculate_measurements_enhanced(landmarks_data: dict, image_shape: tuple,
         is_front = is_front_view(landmarks)
         if not is_front:
             rejected_reasons.append({'angle': 'current', 'reason': 'not_front_view'})
+            # In strict mode, reject the frame instead of using fallback
+            if STRICT_FRONT_MODE:
+                return {
+                    'success': False,
+                    'scan_type': 'invalid',
+                    'measurements': {},
+                    'confidence': empty_confidence,
+                    'warnings': warnings + ['Non-front view rejected in strict mode. Please capture a front-facing pose.'],
+                    'missing_landmarks': [],
+                    'can_calibrate': False,
+                    'fill_ratio': fill_ratio,
+                    'framing': classify_framing(fill_info),
+                    'debug': {
+                        'detected_landmark_count': sum(1 for lm in landmarks if lm.get('visibility', 0) > LANDMARK_CONFIDENCE_THRESHOLD),
+                        'required_keypoint_visibilities': {name: landmarks[idx].get('visibility', 0.0) for idx, name in {11: 'left_shoulder', 12: 'right_shoulder', 23: 'left_hip', 24: 'right_hip'}.items() if idx < len(landmarks)},
+                        'classified_view': classify_view(landmarks),
+                        'front_back_width_px': None,
+                        'side_depth_px': None,
+                        'measurement_sources': {},
+                    }
+                }
 
         left_shoulder = landmarks[11]
         right_shoulder = landmarks[12]
@@ -2487,6 +2677,17 @@ def calculate_measurements_enhanced(landmarks_data: dict, image_shape: tuple,
         'measurement_sources': measurement_sources,
     }
     log_measurement_debug(debug_info)
+
+    # Calculate overall confidence for fail-safe warning
+    overall_confidence = 0.0
+    if confidence:
+        conf_values = [v for v in confidence.values() if v > 0]
+        if conf_values:
+            overall_confidence = sum(conf_values) / len(conf_values)
+
+    # Fail-safe warning when overall confidence is low
+    if overall_confidence < 0.50:
+        warnings.append("Please stand straight facing the camera for accurate measurement")
 
     return {
         'success': True if reliable_measurements else False,

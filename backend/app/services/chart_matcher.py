@@ -15,6 +15,16 @@ from app.models.schemas import (
 )
 
 
+# Clothing ease constants (cm)
+CLOTHING_EASE_CHEST = 6        # Added to measured chest for recommendation
+CLOTHING_EASE_WAIST = 4        # Added to measured waist
+CLOTHING_EASE_HIPS = 4         # Added to measured hips
+
+# Low confidence bias
+LOW_CONFIDENCE_BIAS = 1.05     # 5% toward larger size when confidence < 0.7
+MIN_CONFIDENCE_FOR_ACCURATE = 0.70
+
+
 # Standard size charts for different garment categories (in cm)
 STANDARD_CHARTS = {
     "shirts": {
@@ -264,18 +274,28 @@ def calculate_size_distance(measurements: BodyMeasurements, entry: SizeChartEntr
     return total_distance, measurements_used
 
 
-def calculate_weighted_distance(measurements: BodyMeasurements, entry: SizeChartEntry, category: str) -> tuple[float, list[str]]:
+def calculate_weighted_distance(measurements: BodyMeasurements, entry: SizeChartEntry, category: str, focus_attributes: Optional[list[str]] = None) -> tuple[float, list[str]]:
     """
     Calculate weighted distance between user measurements and size entry.
     Uses category-specific weights for different body measurements.
+
+    Args:
+        focus_attributes: If provided, only calculate distance for these attributes.
+            E.g., ["chest"] to find best size for chest measurement only.
     """
     weights = get_measurement_weights(category)
     total_weighted_distance = 0.0
     total_weight = 0.0
     measurements_used = []
 
+    # Helper to check if attribute should be included
+    def should_include(attr: str) -> bool:
+        if focus_attributes is None:
+            return True
+        return attr in focus_attributes
+
     # Height
-    if entry.height_min is not None and entry.height_max is not None and has_usable_measurement(measurements.height):
+    if should_include("height") and entry.height_min is not None and entry.height_max is not None and has_usable_measurement(measurements.height):
         ideal_height = (entry.height_min + entry.height_max) / 2
         height_range = entry.height_max - entry.height_min
         if height_range > 0:
@@ -286,7 +306,7 @@ def calculate_weighted_distance(measurements: BodyMeasurements, entry: SizeChart
             measurements_used.append("height")
 
     # Chest
-    if entry.chest_min is not None and entry.chest_max is not None and has_usable_measurement(measurements.chest):
+    if should_include("chest") and entry.chest_min is not None and entry.chest_max is not None and has_usable_measurement(measurements.chest):
         ideal_chest = (entry.chest_min + entry.chest_max) / 2
         chest_range = entry.chest_max - entry.chest_min
         if chest_range > 0:
@@ -297,7 +317,7 @@ def calculate_weighted_distance(measurements: BodyMeasurements, entry: SizeChart
             measurements_used.append("chest")
 
     # Waist
-    if entry.waist_min is not None and entry.waist_max is not None and has_usable_measurement(measurements.waist):
+    if should_include("waist") and entry.waist_min is not None and entry.waist_max is not None and has_usable_measurement(measurements.waist):
         ideal_waist = (entry.waist_min + entry.waist_max) / 2
         waist_range = entry.waist_max - entry.waist_min
         if waist_range > 0:
@@ -308,7 +328,7 @@ def calculate_weighted_distance(measurements: BodyMeasurements, entry: SizeChart
             measurements_used.append("waist")
 
     # Hips
-    if entry.hips_min is not None and entry.hips_max is not None and has_usable_measurement(measurements.hips):
+    if should_include("hips") and entry.hips_min is not None and entry.hips_max is not None and has_usable_measurement(measurements.hips):
         ideal_hips = (entry.hips_min + entry.hips_max) / 2
         hips_range = entry.hips_max - entry.hips_min
         if hips_range > 0:
@@ -319,7 +339,7 @@ def calculate_weighted_distance(measurements: BodyMeasurements, entry: SizeChart
             measurements_used.append("hips")
 
     # Shoulder
-    if entry.shoulder_min is not None and entry.shoulder_max is not None and has_usable_measurement(measurements.shoulder_width):
+    if should_include("shoulder") and entry.shoulder_min is not None and entry.shoulder_max is not None and has_usable_measurement(measurements.shoulder_width):
         ideal_shoulder = (entry.shoulder_min + entry.shoulder_max) / 2
         shoulder_range = entry.shoulder_max - entry.shoulder_min
         if shoulder_range > 0:
@@ -438,6 +458,29 @@ def get_size_recommendation(
     # Find best matching sizes
     size_distances.sort(key=lambda x: x["distance"])
 
+    # Check if chest and waist each match different sizes (for shirts category)
+    # This helps detect when user is between sizes
+    chest_best_size = None
+    waist_best_size = None
+    if category == "shirts" and has_usable_measurement(measurements.chest) and has_usable_measurement(measurements.waist):
+        # Find best size for chest
+        chest_distances = [
+            (e.size, calculate_weighted_distance(measurements, e, category, focus_attributes=["chest"])[0])
+            for e in sorted_sizes
+        ]
+        chest_distances.sort(key=lambda x: x[1])
+        if chest_distances:
+            chest_best_size = chest_distances[0][0]
+
+        # Find best size for waist
+        waist_distances = [
+            (e.size, calculate_weighted_distance(measurements, e, category, focus_attributes=["waist"])[0])
+            for e in sorted_sizes
+        ]
+        waist_distances.sort(key=lambda x: x[1])
+        if waist_distances:
+            waist_best_size = waist_distances[0][0]
+
     # Get best match
     if size_distances:
         best = size_distances[0]
@@ -454,6 +497,11 @@ def get_size_recommendation(
 
         # Determine fit type
         fit_type = determine_fit_type(measurements, best_entry, best_distance)
+
+        # Override fit_type to "between_sizes" if chest and waist point to different sizes
+        if chest_best_size and waist_best_size and chest_best_size != waist_best_size:
+            fit_type = "between_sizes"
+            explanation += " Note: Your chest and waist suggest different sizes - consider between sizes."
 
         # Generate explanation
         in_range_parts = check_measurements_in_range(measurements, best_entry)
@@ -474,7 +522,17 @@ def get_size_recommendation(
 
         # Check if between sizes
         alternative_size = None
-        if len(size_distances) > 1:
+        # First check if chest and waist disagree on size
+        if chest_best_size and waist_best_size and chest_best_size != waist_best_size:
+            # Set alternative to the other size (the one chest or waist points to that's different from best)
+            if best_entry.size == chest_best_size:
+                alternative_size = waist_best_size
+            elif best_entry.size == waist_best_size:
+                alternative_size = chest_best_size
+            else:
+                # Best is neither chest nor waist best, pick the closer one
+                alternative_size = chest_best_size
+        elif len(size_distances) > 1:
             second_best = size_distances[1]
             if abs(second_best["distance"] - best_distance) < 0.2:
                 alternative_size = second_best["entry"].size
@@ -523,10 +581,15 @@ def predict_size(
     size_chart: Optional[SizeChart] = None,
     use_standard_chart: bool = True,
     category: str = "shirts",
-    gender: str = "men"
+    gender: str = "men",
+    measurement_confidence: Optional[dict[str, float]] = None
 ) -> SizePredictionResponse:
     """
     Main prediction function - matches body measurements against size chart.
+
+    Args:
+        measurement_confidence: Optional dict with per-measurement confidence scores (0-1).
+            If provided, low-confidence measurements will be downweighted or flagged.
     """
     warnings = []
     measurements_used = [
@@ -539,6 +602,44 @@ def predict_size(
         }.items()
         if has_usable_measurement(value)
     ]
+
+    # Track low-confidence measurements that should be flagged
+    low_confidence_measurements = []
+    if measurement_confidence:
+        for name in measurements_used:
+            conf = measurement_confidence.get(name, 1.0)
+            if conf < 0.5:
+                low_confidence_measurements.append(name)
+
+    # Add warning for low-confidence measurements
+    if low_confidence_measurements:
+        warnings.append(f"Low confidence for: {', '.join(low_confidence_measurements)}. Results may be less accurate.")
+
+    # Calculate average confidence for bias application
+    avg_confidence = 1.0
+    if measurement_confidence:
+        conf_values = [measurement_confidence.get(name, 1.0) for name in measurements_used]
+        if conf_values:
+            avg_confidence = sum(conf_values) / len(conf_values)
+
+    # Fail-safe warning when confidence is low
+    if avg_confidence < 0.50:
+        warnings.append("Please stand straight facing the camera for accurate measurement")
+
+    # Apply clothing ease to create adjusted measurements
+    adjusted_measurements = BodyMeasurements(
+        height=measurements.height,
+        chest=measurements.chest + CLOTHING_EASE_CHEST if measurements.chest else 0,
+        waist=measurements.waist + CLOTHING_EASE_WAIST if measurements.waist else 0,
+        hips=measurements.hips + CLOTHING_EASE_HIPS if measurements.hips else 0,
+        shoulder_width=measurements.shoulder_width
+    )
+
+    # Apply low confidence bias: shift toward larger size when confidence is low
+    if avg_confidence < MIN_CONFIDENCE_FOR_ACCURATE:
+        adjusted_measurements.chest = adjusted_measurements.chest * LOW_CONFIDENCE_BIAS if adjusted_measurements.chest else 0
+        adjusted_measurements.waist = adjusted_measurements.waist * LOW_CONFIDENCE_BIAS if adjusted_measurements.waist else 0
+        adjusted_measurements.hips = adjusted_measurements.hips * LOW_CONFIDENCE_BIAS if adjusted_measurements.hips else 0
 
     if len(measurements_used) < 2:
         return SizePredictionResponse(
@@ -563,7 +664,7 @@ def predict_size(
             warnings=["No size chart available for the specified category"]
         )
 
-    severe_issues, warning_issues = detect_implausible_measurements(measurements, chart)
+    severe_issues, warning_issues = detect_implausible_measurements(adjusted_measurements, chart)
     warnings.extend(warning_issues)
 
     if len(severe_issues) >= 2:
@@ -576,13 +677,13 @@ def predict_size(
             ]
         )
 
-    # Get recommendations
-    recommendations = get_size_recommendation(measurements, chart)
+    # Get recommendations using adjusted measurements (with clothing ease and bias)
+    recommendations = get_size_recommendation(adjusted_measurements, chart)
 
     # Check for warnings
     if recommendations:
         # Check for extreme measurements
-        proportions = calculate_body_proportions(measurements)
+        proportions = calculate_body_proportions(adjusted_measurements)
         if proportions["waist_to_height"] > 0.6:
             warnings.append("Your waist-to-height ratio is unusual. Consider alterations.")
         if proportions["chest_to_waist"] > 1.5:

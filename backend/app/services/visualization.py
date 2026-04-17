@@ -54,39 +54,53 @@ def draw_landmark_markers(image: np.ndarray, landmarks: list) -> np.ndarray:
         for idx in indices:
             if idx < len(landmarks):
                 lm = landmarks[idx]
+                # Skip if visibility is too low
+                visibility = lm.get('visibility', 1.0)
+                if visibility < 0.6:
+                    continue
                 x, y = int(lm['x'] * w), int(lm['y'] * h)
                 # Draw filled circle
                 cv2.circle(output, (x, y), 8, color, -1)
                 # Draw outer ring
                 cv2.circle(output, (x, y), 12, color, 2)
 
-    # Draw measurement lines
+    # Draw measurement lines (with bounds + visibility check)
+    def get_landmark(idx):
+        if idx >= len(landmarks):
+            return None
+        lm = landmarks[idx]
+        if lm.get('visibility', 1.0) < 0.6:
+            return None
+        return lm
 
     # Shoulder line (GREEN)
-    left_shoulder = landmarks[11]
-    right_shoulder = landmarks[12]
-    cv2.line(output,
-             (int(left_shoulder['x'] * w), int(left_shoulder['y'] * h)),
-             (int(right_shoulder['x'] * w), int(right_shoulder['y'] * h)),
-             (0, 255, 0), 3)
+    left_shoulder = get_landmark(11)
+    right_shoulder = get_landmark(12)
+    if left_shoulder and right_shoulder:
+        cv2.line(output,
+                 (int(left_shoulder['x'] * w), int(left_shoulder['y'] * h)),
+                 (int(right_shoulder['x'] * w), int(right_shoulder['y'] * h)),
+                 (0, 255, 0), 3)
 
     # Hip line (MAGENTA)
-    left_hip = landmarks[23]
-    right_hip = landmarks[24]
-    cv2.line(output,
-             (int(left_hip['x'] * w), int(left_hip['y'] * h)),
-             (int(right_hip['x'] * w), int(right_hip['y'] * h)),
-             (255, 0, 255), 3)
+    left_hip = get_landmark(23)
+    right_hip = get_landmark(24)
+    if left_hip and right_hip:
+        cv2.line(output,
+                 (int(left_hip['x'] * w), int(left_hip['y'] * h)),
+                 (int(right_hip['x'] * w), int(right_hip['y'] * h)),
+                 (255, 0, 255), 3)
 
     # Vertical center line (WHITE) - from nose to between ankles
-    nose = landmarks[0]
-    left_ankle = landmarks[27]
-    right_ankle = landmarks[28]
-    center_x = int((left_ankle['x'] + right_ankle['x']) / 2 * w)
-    cv2.line(output,
-             (int(nose['x'] * w), int(nose['y'] * h)),
-             (center_x, int((left_ankle['y'] + right_ankle['y']) / 2 * h)),
-             (255, 255, 255), 1)
+    nose = get_landmark(0)
+    left_ankle = get_landmark(27)
+    right_ankle = get_landmark(28)
+    if nose and left_ankle and right_ankle:
+        center_x = int((left_ankle['x'] + right_ankle['x']) / 2 * w)
+        cv2.line(output,
+                 (int(nose['x'] * w), int(nose['y'] * h)),
+                 (center_x, int((left_ankle['y'] + right_ankle['y']) / 2 * h)),
+                 (255, 255, 255), 1)
 
     return output
 
@@ -140,6 +154,9 @@ def draw_body_outline(image: np.ndarray, landmarks: list) -> np.ndarray:
         if start_idx < len(landmarks) and end_idx < len(landmarks):
             start_lm = landmarks[start_idx]
             end_lm = landmarks[end_idx]
+            # Skip if either landmark has low visibility
+            if start_lm.get('visibility', 1.0) < 0.6 or end_lm.get('visibility', 1.0) < 0.6:
+                continue
             cv2.line(output,
                      (int(start_lm['x'] * w), int(start_lm['y'] * h)),
                      (int(end_lm['x'] * w), int(end_lm['y'] * h)),

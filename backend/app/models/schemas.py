@@ -122,6 +122,7 @@ class SizePredictionRequest(BaseModel):
     use_standard_chart: bool = Field(True, description="Use standard size chart if no brand chart provided")
     category: Optional[str] = Field("shirts", description="Garment category for standard chart lookup")
     gender: Optional[str] = Field("men", description="Target gender for standard chart lookup")
+    confidence: Optional[dict[str, float]] = Field(None, description="Per-measurement confidence scores from scan")
 
 
 class SizeRecommendation(BaseModel):

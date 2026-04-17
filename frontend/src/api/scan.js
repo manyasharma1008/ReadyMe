@@ -136,6 +136,16 @@ export async function getCalibrationStatus() {
 }
 
 /**
+ * Check live framing guidance for a single video frame.
+ */
+export async function checkFraming(file) {
+  const formData = new FormData();
+  formData.append("frame", file);
+
+  return apiPostFormData(ENDPOINTS.SCAN_FRAMING_CHECK, formData);
+}
+
+/**
  * Validate image file type
  */
 export function isValidImageFile(file) {

@@ -548,28 +548,49 @@ def test_find_hip_y_ratio():
 
 
 def test_find_chest_y_ratio():
-    """Test finding chest y-ratio with maximum width search in upper torso."""
-    from app.services.measurement import find_chest_y_ratio
+    """Chest search should stay in the bust window instead of collapsing to the shoulder band."""
+    from app.services import measurement
 
-    # Create landmarks where shoulders are wider than waist (typical torso)
-    # Shoulders at y=0.3 with x=0.2 to 0.8 (width=0.6)
-    # Waist at y=0.55 with x=0.4 to 0.6 (width=0.2)
-    # Chest should be found somewhere between shoulders and waist
-    landmarks = [
-        {'x': 0.5, 'y': 0.3, 'z': 0.0, 'visibility': 0.9} if i == 0 else
-        {'x': 0.2, 'y': 0.3, 'z': 0.0, 'visibility': 0.9} if i == 11 else  # left_shoulder wider
-        {'x': 0.8, 'y': 0.3, 'z': 0.0, 'visibility': 0.9} if i == 12 else  # right_shoulder wider
-        {'x': 0.5, 'y': 0.8, 'z': 0.0, 'visibility': 0.9} if i == 23 else
-        {'x': 0.5, 'y': 0.8, 'z': 0.0, 'visibility': 0.9} if i == 24 else
-        {'x': 0.5, 'y': 0.5, 'z': 0.0, 'visibility': 0.9}
-        for i in range(33)
-    ]
+    landmarks = [{'x': 0.5, 'y': 0.5, 'z': 0.0, 'visibility': 0.9} for _ in range(33)]
     pixel_height = 800.0
     waist_y = 0.55
 
-    chest_y = find_chest_y_ratio(landmarks, pixel_height, waist_y)
-    # Should be above waist, and likely around shoulders (y=0.3)
-    assert 0.0 < chest_y <= 0.55, f"Expected chest_y in (0, 0.55], got {chest_y}"
+    bust_widths = {
+        0.28: 32.0,
+        0.30: 35.0,
+        0.32: 38.0,
+        0.34: 41.0,
+        0.36: 45.0,
+        0.38: 47.0,
+        0.40: 44.0,
+        0.42: 40.0,
+        0.44: 37.0,
+        0.46: 34.0,
+        0.48: 31.0,
+        0.50: 29.0,
+    }
+
+    def fake_measure_width_cm_at_y(_landmarks, _image_shape, _pixel_height, _user_height_cm, y_ratio):
+        return bust_widths.get(round(y_ratio, 2), 0.0)
+
+    original = measurement.measure_width_cm_at_y
+    measurement.measure_width_cm_at_y = fake_measure_width_cm_at_y
+    try:
+        chest_y = measurement.find_chest_y_ratio(landmarks, pixel_height, waist_y)
+    finally:
+        measurement.measure_width_cm_at_y = original
+
+    assert 0.36 <= chest_y <= 0.40, f"Expected chest_y in bust window, got {chest_y}"
+
+
+def _make_multiview_landmarks():
+    landmarks = [{'x': 0.5, 'y': 0.5, 'z': 0.0, 'visibility': 0.9} for _ in range(33)]
+    landmarks[0] = {'x': 0.5, 'y': 0.2, 'z': 0.0, 'visibility': 0.9}
+    landmarks[11] = {'x': 0.35, 'y': 0.3, 'z': 0.0, 'visibility': 0.9}
+    landmarks[12] = {'x': 0.65, 'y': 0.3, 'z': 0.0, 'visibility': 0.9}
+    landmarks[23] = {'x': 0.4, 'y': 0.6, 'z': 0.0, 'visibility': 0.9}
+    landmarks[24] = {'x': 0.6, 'y': 0.6, 'z': 0.0, 'visibility': 0.9}
+    return landmarks
 
 
 # Tests for fuse_multiview_circumference
@@ -717,3 +738,246 @@ def test_fuse_multiview_circumference_empty():
     assert result['hips'] == 0.0
     assert result['chest'] == 0.0
     assert result['confidence'] == 0.0
+
+
+def test_fuse_multiview_circumference_uses_raw_landmark_widths(monkeypatch):
+    """Front/back landmark widths should not be inflated by silhouette padding."""
+    from app.services import measurement
+
+    raw_width_cm = 40.0
+    expected = measurement.ramanujan_ellipse_perimeter(
+        raw_width_cm,
+        raw_width_cm * measurement.DEPTH_WIDTH_FALLBACK_RATIO,
+    )
+
+    monkeypatch.setattr(measurement, 'find_waist_y_ratio', lambda *args, **kwargs: 0.55)
+    monkeypatch.setattr(measurement, 'find_hip_y_ratio', lambda *args, **kwargs: 0.75)
+    monkeypatch.setattr(measurement, 'find_chest_y_ratio', lambda *args, **kwargs: 0.38)
+    monkeypatch.setattr(measurement, 'measure_width_cm_at_y', lambda *args, **kwargs: raw_width_cm)
+    monkeypatch.setattr(measurement, 'measure_depth_cm_at_y', lambda *args, **kwargs: 0.0)
+
+    views = {
+        'front': {
+            'landmarks': _make_multiview_landmarks(),
+            'image_shape': (800, 800, 3),
+            'pixel_height': 700,
+            'declared_view_type': 'front',
+        },
+        'back': {
+            'landmarks': _make_multiview_landmarks(),
+            'image_shape': (800, 800, 3),
+            'pixel_height': 700,
+            'declared_view_type': 'back',
+        },
+    }
+
+    result = measurement.fuse_multiview_circumference(views, user_height_cm=165.0)
+    assert result['chest'] == pytest.approx(expected, rel=1e-6)
+
+
+def test_fuse_multiview_circumference_uses_shared_depth_fallback_ratio(monkeypatch):
+    """Missing depth and rejected depth should use the same fallback ratio."""
+    from app.services import measurement
+
+    raw_width_cm = 40.0
+    expected = measurement.ramanujan_ellipse_perimeter(
+        raw_width_cm,
+        raw_width_cm * measurement.DEPTH_WIDTH_FALLBACK_RATIO,
+    )
+
+    monkeypatch.setattr(measurement, 'find_waist_y_ratio', lambda *args, **kwargs: 0.55)
+    monkeypatch.setattr(measurement, 'find_hip_y_ratio', lambda *args, **kwargs: 0.75)
+    monkeypatch.setattr(measurement, 'find_chest_y_ratio', lambda *args, **kwargs: 0.38)
+    monkeypatch.setattr(measurement, 'measure_width_cm_at_y', lambda *args, **kwargs: raw_width_cm)
+
+    front_back_views = {
+        'front': {
+            'landmarks': _make_multiview_landmarks(),
+            'image_shape': (800, 800, 3),
+            'pixel_height': 700,
+            'declared_view_type': 'front',
+        },
+        'back': {
+            'landmarks': _make_multiview_landmarks(),
+            'image_shape': (800, 800, 3),
+            'pixel_height': 700,
+            'declared_view_type': 'back',
+        },
+    }
+
+    monkeypatch.setattr(measurement, 'measure_depth_cm_at_y', lambda *args, **kwargs: 0.0)
+    result_without_side = measurement.fuse_multiview_circumference(front_back_views, user_height_cm=165.0)
+
+    side_views = dict(front_back_views)
+    side_views['left'] = {
+        'landmarks': _make_multiview_landmarks(),
+        'image_shape': (800, 800, 3),
+        'pixel_height': 700,
+        'declared_view_type': 'left',
+    }
+
+    monkeypatch.setattr(measurement, 'measure_depth_cm_at_y', lambda *args, **kwargs: 5.0)
+    result_with_bad_side = measurement.fuse_multiview_circumference(side_views, user_height_cm=165.0)
+
+    assert result_without_side['chest'] == pytest.approx(expected, rel=1e-6)
+    assert result_with_bad_side['chest'] == pytest.approx(expected, rel=1e-6)
+
+
+def test_fuse_multiview_circumference_single_view_uses_part_specific_factors(monkeypatch):
+    """Single-view fallback should use the chest, waist, and hip-specific factors."""
+    from app.services import measurement
+
+    raw_width_cm = 40.0
+
+    monkeypatch.setattr(measurement, 'find_waist_y_ratio', lambda *args, **kwargs: 0.55)
+    monkeypatch.setattr(measurement, 'find_hip_y_ratio', lambda *args, **kwargs: 0.75)
+    monkeypatch.setattr(measurement, 'find_chest_y_ratio', lambda *args, **kwargs: 0.38)
+    monkeypatch.setattr(measurement, 'measure_width_cm_at_y', lambda *args, **kwargs: raw_width_cm)
+    monkeypatch.setattr(measurement, 'measure_depth_cm_at_y', lambda *args, **kwargs: 0.0)
+
+    views = {
+        'front': {
+            'landmarks': _make_multiview_landmarks(),
+            'image_shape': (800, 800, 3),
+            'pixel_height': 700,
+            'declared_view_type': 'front',
+        },
+    }
+
+    result = measurement.fuse_multiview_circumference(views, user_height_cm=165.0)
+
+    assert result['chest'] == pytest.approx(raw_width_cm * measurement.FALLBACK_CHEST_CIRCUMFERENCE_FACTOR)
+    assert result['waist'] == pytest.approx(raw_width_cm * measurement.FALLBACK_WAIST_CIRCUMFERENCE_FACTOR)
+    assert result['hips'] == pytest.approx(raw_width_cm * measurement.FALLBACK_HIP_CIRCUMFERENCE_FACTOR)
+
+
+def test_calculate_chest_uses_ellipse_conversion(monkeypatch):
+    """Chest calculation should use width-to-ellipse conversion instead of a flat factor."""
+    from app.services import measurement
+
+    monkeypatch.setattr(
+        measurement,
+        'get_body_width_points',
+        lambda *args, **kwargs: ({'x': 0.3, 'y': 0.4}, {'x': 0.7, 'y': 0.4}),
+    )
+    monkeypatch.setattr(measurement, 'horizontal_distance_px', lambda *args, **kwargs: 40.0)
+    monkeypatch.setattr(measurement, 'measure_from_ratio', lambda *args, **kwargs: 32.0)
+
+    chest_cm, is_valid = measurement.calculate_chest(
+        _make_multiview_landmarks(),
+        (800, 800, 3),
+        pixel_height=700,
+        user_height_cm=165.0,
+    )
+
+    expected = measurement.ramanujan_ellipse_perimeter(
+        32.0,
+        32.0 * measurement.DEPTH_WIDTH_FALLBACK_RATIO,
+    )
+    assert is_valid is True
+    assert chest_cm == pytest.approx(expected, rel=1e-6)
+
+
+def test_calculate_chest_calibrated_uses_ellipse_conversion(monkeypatch):
+    """Calibrated chest calculation should use the same ellipse conversion."""
+    from app.services import measurement
+
+    monkeypatch.setattr(
+        measurement,
+        'get_body_width_points',
+        lambda *args, **kwargs: ({'x': 0.3, 'y': 0.4}, {'x': 0.7, 'y': 0.4}),
+    )
+    monkeypatch.setattr(measurement, 'horizontal_distance_px', lambda *args, **kwargs: 44.0)
+
+    chest_cm = measurement.calculate_chest_calibrated(
+        _make_multiview_landmarks(),
+        (800, 800, 3),
+        calibration_factor=1.1,
+    )
+
+    expected_width_cm = 44.0 / 1.1
+    expected = measurement.ramanujan_ellipse_perimeter(
+        expected_width_cm,
+        expected_width_cm * measurement.DEPTH_WIDTH_FALLBACK_RATIO,
+    )
+    assert chest_cm == pytest.approx(expected, rel=1e-6)
+
+
+def test_confidence_reflects_fused_value_quality():
+    """Test that confidence reflects actual measurement quality from fusion.
+
+    When measurements from different views agree closely, confidence should be high.
+    When views disagree significantly, confidence should be lower.
+    """
+    from app.services.measurement import fuse_multiview_circumference
+
+    # Create front/back views with good alignment (similar widths)
+    # Front view: shoulders at x=0.3, 0.7 (wide)
+    front_landmarks_good = [
+        {'x': 0.5, 'y': 0.3, 'z': 0.0, 'visibility': 0.9} if i == 0 else
+        {'x': 0.3, 'y': 0.3, 'z': 0.0, 'visibility': 0.9} if i == 11 else  # left_shoulder
+        {'x': 0.7, 'y': 0.3, 'z': 0.0, 'visibility': 0.9} if i == 12 else  # right_shoulder
+        {'x': 0.32, 'y': 0.55, 'z': 0.0, 'visibility': 0.9} if i == 23 else  # left_hip (waist level)
+        {'x': 0.68, 'y': 0.55, 'z': 0.0, 'visibility': 0.9} if i == 24 else  # right_hip
+        {'x': 0.5, 'y': 0.8, 'z': 0.0, 'visibility': 0.9} if i == 25 else
+        {'x': 0.5, 'y': 0.5, 'z': 0.0, 'visibility': 0.9}
+        for i in range(33)
+    ]
+
+    back_landmarks_good = [
+        {'x': 0.5, 'y': 0.3, 'z': -0.1, 'visibility': 0.9} if i == 0 else
+        {'x': 0.3, 'y': 0.3, 'z': 0.0, 'visibility': 0.9} if i == 11 else
+        {'x': 0.7, 'y': 0.3, 'z': 0.0, 'visibility': 0.9} if i == 12 else
+        {'x': 0.32, 'y': 0.55, 'z': 0.0, 'visibility': 0.9} if i == 23 else
+        {'x': 0.68, 'y': 0.55, 'z': 0.0, 'visibility': 0.9} if i == 24 else
+        {'x': 0.5, 'y': 0.8, 'z': 0.0, 'visibility': 0.9} if i == 25 else
+        {'x': 0.5, 'y': 0.5, 'z': 0.0, 'visibility': 0.9}
+        for i in range(33)
+    ]
+
+    views_good = {
+        'front': {'landmarks': front_landmarks_good, 'image_shape': (800, 800, 3), 'pixel_height': 700},
+        'back': {'landmarks': back_landmarks_good, 'image_shape': (800, 800, 3), 'pixel_height': 700},
+    }
+
+    result_good = fuse_multiview_circumference(views_good, user_height_cm=170.0)
+
+    # With good alignment, confidence should be high (>= 0.8)
+    assert result_good['confidence'] >= 0.8, f"Expected confidence >= 0.8 for good alignment, got {result_good['confidence']}"
+
+    # Now test with poor alignment (views have very different measurements)
+    # Front view: narrow shoulders
+    front_landmarks_poor = [
+        {'x': 0.5, 'y': 0.3, 'z': 0.0, 'visibility': 0.9} if i == 0 else
+        {'x': 0.42, 'y': 0.3, 'z': 0.0, 'visibility': 0.9} if i == 11 else  # left_shoulder (narrower)
+        {'x': 0.58, 'y': 0.3, 'z': 0.0, 'visibility': 0.9} if i == 12 else  # right_shoulder
+        {'x': 0.43, 'y': 0.55, 'z': 0.0, 'visibility': 0.9} if i == 23 else
+        {'x': 0.57, 'y': 0.55, 'z': 0.0, 'visibility': 0.9} if i == 24 else
+        {'x': 0.5, 'y': 0.8, 'z': 0.0, 'visibility': 0.9} if i == 25 else
+        {'x': 0.5, 'y': 0.5, 'z': 0.0, 'visibility': 0.9}
+        for i in range(33)
+    ]
+
+    # Back view: wide shoulders (opposite)
+    back_landmarks_poor = [
+        {'x': 0.5, 'y': 0.3, 'z': -0.1, 'visibility': 0.9} if i == 0 else
+        {'x': 0.2, 'y': 0.3, 'z': 0.0, 'visibility': 0.9} if i == 11 else  # left_shoulder (wider)
+        {'x': 0.8, 'y': 0.3, 'z': 0.0, 'visibility': 0.9} if i == 12 else  # right_shoulder
+        {'x': 0.25, 'y': 0.55, 'z': 0.0, 'visibility': 0.9} if i == 23 else
+        {'x': 0.75, 'y': 0.55, 'z': 0.0, 'visibility': 0.9} if i == 24 else
+        {'x': 0.5, 'y': 0.8, 'z': 0.0, 'visibility': 0.9} if i == 25 else
+        {'x': 0.5, 'y': 0.5, 'z': 0.0, 'visibility': 0.9}
+        for i in range(33)
+    ]
+
+    views_poor = {
+        'front': {'landmarks': front_landmarks_poor, 'image_shape': (800, 800, 3), 'pixel_height': 700},
+        'back': {'landmarks': back_landmarks_poor, 'image_shape': (800, 800, 3), 'pixel_height': 700},
+    }
+
+    result_poor = fuse_multiview_circumference(views_poor, user_height_cm=170.0)
+
+    # With poor alignment (disagreement between views), confidence should be lower
+    # This tests that confidence reflects actual measurement quality
+    assert result_poor['confidence'] < result_good['confidence'], \
+        f"Poor alignment should have lower confidence than good alignment: good={result_good['confidence']}, poor={result_poor['confidence']}"
