@@ -34,6 +34,16 @@ class MeasurementConfidence(BaseModel):
     shoulder_width: float = Field(0.0, description="Confidence for shoulder width measurement")
 
 
+class MeasurementDebug(BaseModel):
+    """Debug information for measurements."""
+    detected_landmark_count: int = Field(0, description="Number of landmarks with visibility > 0.6")
+    required_keypoint_visibilities: dict = Field(default_factory=dict, description="Visibility scores for key landmarks")
+    classified_view: str = Field("unknown", description="Detected view angle")
+    front_back_width_px: Optional[float] = Field(None, description="Width in pixels from front/back view")
+    side_depth_px: Optional[float] = Field(None, description="Depth in pixels from side view")
+    measurement_sources: dict = Field(default_factory=dict, description="Source of each measurement")
+
+
 class MeasurementConfidenceLevel(BaseModel):
     """Confidence levels for each measurement (high/medium/low)."""
     height: str = Field("low", description="Confidence level: high, medium, or low")
@@ -60,6 +70,7 @@ class ScanMeasureResponseV2(BaseModel):
     missing_landmarks: list[str] = Field(default_factory=list, description="List of missing landmark names")
     message: Optional[str] = Field(None, description="Optional message")
     landmarks: Optional[list] = Field(default_factory=list, description="Body landmarks for visualization")
+    debug: Optional[MeasurementDebug] = Field(None, description="Debug information for measurements")
 
 
 class ProfileSaveRequest(BaseModel):
@@ -111,6 +122,7 @@ class SizePredictionRequest(BaseModel):
     use_standard_chart: bool = Field(True, description="Use standard size chart if no brand chart provided")
     category: Optional[str] = Field("shirts", description="Garment category for standard chart lookup")
     gender: Optional[str] = Field("men", description="Target gender for standard chart lookup")
+    confidence: Optional[dict[str, float]] = Field(None, description="Per-measurement confidence scores from scan")
 
 
 class SizeRecommendation(BaseModel):

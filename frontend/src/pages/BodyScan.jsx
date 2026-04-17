@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom"
 import { useScanImage } from "../hooks"
 import { useMediaPipe } from "../hooks/useMediaPipe"
 import { useFramingGuidance } from "../hooks/useFramingGuidance"
+import { useAutoCapture } from "../hooks/useAutoCapture"
 import { useApp } from "../context/AppContext"
 import { scanMeasureEnhanced, scanMeasureMultiple } from "../api"
 import LoadingSpinner from "../components/common/LoadingSpinner"
@@ -219,6 +220,9 @@ function BodyScan() {
   const landmarksRef = useRef(null)
   const navigate = useNavigate()
 
+  // Ref to store startAutoCapture callback for useAutoCapture hook
+  const startAutoCaptureRef = useRef(null)
+
   const [step, setStep] = useState(1)
   const [capturedImages, setCapturedImages] = useState([])
   const [capturedImagesMap, setCapturedImagesMap] = useState({ front: null, left: null, right: null, back: null })
@@ -233,8 +237,9 @@ function BodyScan() {
   const [multiScanResults, setMultiScanResults] = useState(null)
   const [multiLoading, setMultiLoading] = useState(false)
   const [countingDown, setCountingDown] = useState(false)
-  const [countdownNumber, setCountdownNumber] = useState(3)
+  const [manualCountdownNumber, setManualCountdownNumber] = useState(3)
   const [localError, setLocalError] = useState(null)
+  const [cameraError, setCameraError] = useState(null)
   const [isCapturing, setIsCapturing] = useState(false)
   const [currentCaptureStep, setCurrentCaptureStep] = useState(0)
 
@@ -254,6 +259,31 @@ function BodyScan() {
   // Real-time framing guidance
   const framing = useFramingGuidance(videoRef)
 
+  // Auto-capture hook - uses ref to access startAutoCapture after it's defined
+  const {
+    countdownActive,
+    countdownNumber,
+    stabilizing,
+    cancel: cancelAutoCapture,
+    resetCapture,
+    handleFramingChange,
+  } = useAutoCapture(videoRef, () => startAutoCaptureRef.current?.(), {
+    enabled: !isCapturing,
+    stabilityMs: 3000,
+    countdownMs: 1000,
+  })
+
+  // Pass framing changes to auto-capture
+  useEffect(() => {
+    handleFramingChange(framing.status)
+  }, [framing.status, handleFramingChange])
+
+  useEffect(() => {
+    if (!isCapturing) {
+      resetCapture()
+    }
+  }, [isCapturing, resetCapture])
+
   // Use local error state for scan errors
   const displayError = localError || scanError || mediapipeError
 
@@ -263,6 +293,11 @@ function BodyScan() {
     "Turn to your right side",
     "Turn your back to the camera"
   ]
+
+  const activeInstruction =
+    isCapturing && currentCaptureStep > 0
+      ? instructions[currentCaptureStep - 1]
+      : instructions[step - 1]
 
   // Load saved height from localStorage on mount (as suggestion, not source of truth)
   useEffect(() => {
@@ -347,7 +382,10 @@ function BodyScan() {
         streamRef.current = stream
 
       } catch (error) {
-        alert("Camera access denied")
+        console.error("Camera error:", error)
+        setCameraError(error.name === 'NotAllowedError'
+          ? "Camera permission denied. Please allow camera access and try again."
+          : "Failed to access camera. Please ensure your camera is connected.")
       }
     }
 
@@ -401,10 +439,12 @@ function BodyScan() {
   const handleCapture = async () => {
     await startAutoCapture()
   }
+
   // Automated multi-capture function - captures 4 images with countdowns
   const startAutoCapture = async () => {
     if (isCapturing || countingDown || loading) return
 
+    cancelAutoCapture()
     setIsCapturing(true)
     setStep(1)
     clearError()
@@ -428,10 +468,10 @@ function BodyScan() {
       // Show "turn to next pose" message for steps 2-4
       if (i > 0) {
         setCountingDown(true)
-        setCountdownNumber(0)
+        setManualCountdownNumber(0)
         // Give user 3 seconds to turn to next position
         for (let t = 3; t > 0; t--) {
-          setCountdownNumber(-t) // negative to show "turn" message
+          setManualCountdownNumber(-t) // negative to show "turn" message
           await new Promise(resolve => setTimeout(resolve, 1000))
         }
       }
@@ -451,7 +491,7 @@ function BodyScan() {
       // Countdown: 3 -> 2 -> 1
       setCountingDown(true)
       for (let t = 3; t > 0; t--) {
-        setCountdownNumber(t)
+        setManualCountdownNumber(t)
         await new Promise(resolve => setTimeout(resolve, 1000))
       }
       setCountingDown(false)
@@ -502,6 +542,10 @@ function BodyScan() {
     // Pass images directly from local variables
     await processScannedImages(capturedImagesMapLocal, capturedImagesArray)
   }
+
+  useEffect(() => {
+    startAutoCaptureRef.current = startAutoCapture
+  }, [startAutoCapture])
 
   // Process scanned images - handles backend API calls
   const processScannedImages = async (imagesMapArg, imagesArray) => {
@@ -652,7 +696,15 @@ function BodyScan() {
           : 0
       })
 
-      if (visResponse?.confidence) {
+      // Use fusion confidence directly if available (from ellipse fusion)
+      const fusionConfidence = visResponse?.fusion_debug?.confidence
+      if (typeof fusionConfidence === 'number' && fusionConfidence > 0) {
+        // Apply fusion confidence to circumference measurements
+        combinedConfidence['chest'] = fusionConfidence
+        combinedConfidence['waist'] = fusionConfidence
+        combinedConfidence['hips'] = fusionConfidence
+      } else if (visResponse?.confidence) {
+        // Fall back to per-image confidence only when no fusion available
         const confidenceEntries = Object.entries(visResponse.confidence)
         confidenceEntries.forEach(([key, value]) => {
           if (typeof value === "number") {
@@ -790,6 +842,23 @@ function BodyScan() {
         Body Scan
       </h1>
 
+      {/* Camera Error Display */}
+      {cameraError && (
+        <div className="mt-4 bg-red-50 border border-red-200 rounded-lg p-4 max-w-md">
+          <p className="text-sm text-red-700 font-medium">Camera Error</p>
+          <p className="text-sm text-red-600 mt-1">{cameraError}</p>
+          <button
+            onClick={() => {
+              setCameraError(null)
+              window.location.reload()
+            }}
+            className="mt-3 text-sm bg-red-600 text-white px-4 py-2 rounded hover:bg-red-700"
+          >
+            Retry
+          </button>
+        </div>
+      )}
+
       {/* Real-time detection status */}
       {mediapipeLoaded && !mediapipeLoading && (
         <div className="mt-2 flex items-center gap-2 text-xs text-green-600">
@@ -800,7 +869,7 @@ function BodyScan() {
 
       {/* Subtitle */}
       <p className="mt-2 text-sm text-charcoal-700/70">
-        {instructions[step - 1]}
+        {activeInstruction}
       </p>
 
       {/* Height Input for Calibration */}
@@ -913,6 +982,24 @@ function BodyScan() {
             <FramingOverlay state={framing} />
           )}
 
+          {/* Auto-capture countdown overlay */}
+          {countdownActive && (
+            <div className="absolute inset-0 flex items-center justify-center bg-black/60 z-50">
+              <span className="text-9xl font-bold text-white animate-pulse">
+                {countdownNumber}
+              </span>
+            </div>
+          )}
+
+          {/* Auto-capture stabilizing message */}
+          {stabilizing && !countdownActive && (
+            <div className="absolute bottom-24 left-0 right-0 text-center z-40">
+              <p className="text-white text-sm bg-black/50 px-4 py-2 rounded-full inline-block">
+                Hold still for auto-capture...
+              </p>
+            </div>
+          )}
+
           {/* MediaPipe loading indicator */}
           {mediapipeLoading && (
             <div className="absolute inset-0 bg-black/50 flex flex-col items-center justify-center text-white">
@@ -932,18 +1019,18 @@ function BodyScan() {
           {/* Countdown overlay */}
           {countingDown && (
             <div className="absolute inset-0 bg-black/70 flex flex-col items-center justify-center text-white">
-              {countdownNumber > 0 ? (
+              {manualCountdownNumber > 0 ? (
                 <>
-                  <p className="text-8xl font-bold text-clay animate-pulse">{countdownNumber}</p>
+                  <p className="text-8xl font-bold text-clay animate-pulse">{manualCountdownNumber}</p>
                   <p className="mt-4 text-lg">
-                    {isCapturing ? instructions[currentCaptureStep - 1] : "Get ready!"}
+                    {isCapturing ? activeInstruction : "Get ready!"}
                   </p>
                 </>
               ) : (
                 <>
                   <p className="text-4xl font-bold text-clay">Turn to next position</p>
                   <p className="mt-4 text-lg">
-                    {instructions[currentCaptureStep - 1]}
+                    {activeInstruction}
                   </p>
                 </>
               )}
@@ -1041,15 +1128,15 @@ function BodyScan() {
       {/* Capture Button */}
       <button
         onClick={startAutoCapture}
-        disabled={loading || countingDown || isCapturing || framing.status !== 'ideal'}
+        disabled={loading || countingDown || isCapturing || !['ideal', 'near_too_far', 'near_too_close'].includes(framing.status)}
         className={`mt-6 text-sm relative group transition-all duration-300 ${
-          loading || countingDown || isCapturing || framing.status !== 'ideal'
+          loading || countingDown || isCapturing || !['ideal', 'near_too_far', 'near_too_close'].includes(framing.status)
             ? "text-gray-400 cursor-not-allowed"
             : "text-charcoal-900"
         }`}
       >
         <span className="relative z-10">
-          {loading ? "Processing..." : isCapturing ? "Scanning..." : framing.status === 'ideal' ? "Start Scan" : "Waiting for good framing..."}
+          {loading ? "Processing..." : isCapturing ? "Scanning..." : ['ideal', 'near_too_far', 'near_too_close'].includes(framing.status) ? (stabilizing && !countdownActive ? "Hold for auto..." : "Start Scan") : "Waiting for good framing..."}
         </span>
 
         <span className="absolute left-0 bottom-0 w-0 h-[1px] bg-charcoal-900 transition-all duration-300 group-hover:w-full"></span>

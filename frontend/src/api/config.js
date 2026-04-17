@@ -36,6 +36,7 @@ export const ENDPOINTS = {
   SCAN_MEASURE_MULTIPLE: '/scan/measure-multiple',
   SCAN_VISUALIZE: '/scan/visualize',
   SCAN_CALIBRATE_STATUS: '/scan/calibrate/status',
+  SCAN_FRAMING_CHECK: '/scan/framing/check',
 
   // Size prediction endpoints
   SIZE_PREDICT: '/size/predict',

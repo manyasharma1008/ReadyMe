@@ -941,7 +941,7 @@ git commit -m "feat: complete multiview circumference fix
 - Implement fuse_multiview_circumference with ellipse geometry
 - Integrate with scan.py endpoint
 
-Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>"
+
 ```
 
 ---

@@ -26,6 +26,7 @@ export {
   scanMeasureEnhanced,
   visualizeLandmarks,
   getCalibrationStatus,
+  checkFraming,
   fileToBase64,
   isValidImageFile,
   getSupportedImageTypes,
